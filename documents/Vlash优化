@@ -1,0 +1,36 @@
+1. 配置扩展 (kuavo_deploy/config.py)
+新增 VLASHOptimizationConfig 数据类，包含：
+use_torch_compile: 启用torch.compile优化
+compile_mode: 编译模式选择
+warmup_steps: 编译后warmup步数
+use_async_inference: 启用异步推理
+inference_overlap_steps: 重叠步数
+n_action_steps_override: 覆盖action步数
+use_future_state_awareness: 使用未来状态预测
+2. 新建工具模块 (kuavo_deploy/utils/inference_utils.py)
+create_dummy_observation(): 创建dummy观测用于warmup
+warmup_policy(): 编译后warmup策略
+compile_policy(): 应用torch.compile优化
+estimate_inference_time(): 估算推理时间
+3. 新建异步推理管理器 (kuavo_deploy/utils/async_manager.py)
+AsyncInferenceManager: 实现VLASH风格的异步推理
+在执行当前chunk时预计算下一个chunk
+Future-state-awareness支持
+自动统计推理时间
+SyncInferenceManager: 同步推理管理器（用于对比）
+4. 更新推理脚本 (kuavo_deploy/src/eval/real_single_test.py)
+setup_policy() 支持VLASH配置参数
+主循环集成异步推理管理器
+添加推理统计日志
+5. 更新配置文件 (configs/deploy/kuavo_env.yaml)
+新增 vlash_optimization 配置块
+所有优化默认禁用，确保向后兼容
+6. 更新文档
+在调研报告中添加"已实现的VLASH优化功能"章节
+使用方式
+在 configs/deploy/kuavo_env.yaml 中启用优化：
+inference:
+  vlash_optimization:
+    use_torch_compile: true
+    use_async_inference: true
+    n_action_steps_override: 20

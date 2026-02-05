@@ -72,6 +72,15 @@ COPY --from=builder /root/kuavo_data_challenge /root/kuavo_data_challenge
 ENV PATH="/opt/conda/bin:${PATH}"
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
+# HuggingFace 缓存环境变量
+ENV HF_HOME=/root/.cache/huggingface
+ENV TRANSFORMERS_CACHE=/root/.cache/huggingface/hub
+
+# 复制 PaliGemma tokenizer 缓存到用户目录
+RUN mkdir -p /root/.cache/huggingface/hub && \
+    if [ -d "/root/kuavo_data_challenge/.cache/huggingface/hub/models--google--paligemma-3b-pt-224" ]; then \
+        cp -r /root/kuavo_data_challenge/.cache/huggingface/hub/models--google--paligemma-3b-pt-224 /root/.cache/huggingface/hub/; \
+    fi
 
 RUN apt-get update && apt-get install -y \
     ros-noetic-cv-bridge \

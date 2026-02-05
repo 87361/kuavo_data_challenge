@@ -145,6 +145,28 @@ class ConfigEnv:
 
 
 # -----------------------
+# VLASH Optimization Config (inspired by VLASH framework)
+# -----------------------
+@dataclass
+class VLASHOptimizationConfig:
+    """VLASH-inspired inference optimization configuration.
+    
+    These optimizations are disabled by default for backward compatibility.
+    Enable them via config to improve inference performance.
+    """
+    # torch.compile optimization
+    use_torch_compile: bool = False          # Enable torch.compile for model optimization
+    compile_mode: str = "max-autotune"       # Compile mode: default/reduce-overhead/max-autotune
+    warmup_steps: int = 3                    # Number of warmup steps after compilation
+    
+    # Async inference optimization (requires disabling temporal_ensemble)
+    use_async_inference: bool = False        # Enable async inference manager
+    inference_overlap_steps: int = 4         # Steps before chunk end to start next inference
+    n_action_steps_override: int = 0         # Override n_action_steps (0=use model config)
+    use_future_state_awareness: bool = True  # Use predicted future state for next inference
+
+
+# -----------------------
 # Inference Dataclass
 # -----------------------
 @dataclass
@@ -161,6 +183,9 @@ class ConfigInference:
     epoch: int = 1
     max_episode_steps: int = 1000
     env_name: str = "Kuavo-Sim"
+    
+    # VLASH optimization config (new)
+    vlash_optimization: VLASHOptimizationConfig = field(default_factory=VLASHOptimizationConfig)
 
     def validate(self):
         if self.policy_type not in ["diffusion", "act", "pi05"]:
@@ -238,6 +263,16 @@ def load_kuavo_config(config_path: Optional[str] = None) -> KuavoConfig:
 
     merged_env = {**asdict(default_env), **env_cfg}
     merged_inf = {**asdict(default_inf), **inf_cfg}
+    
+    # Handle nested vlash_optimization config
+    if 'vlash_optimization' in merged_inf:
+        vlash_cfg = merged_inf.pop('vlash_optimization')
+        if isinstance(vlash_cfg, dict):
+            default_vlash = VLASHOptimizationConfig()
+            merged_vlash = {**asdict(default_vlash), **vlash_cfg}
+            merged_inf['vlash_optimization'] = VLASHOptimizationConfig(**merged_vlash)
+        elif isinstance(vlash_cfg, VLASHOptimizationConfig):
+            merged_inf['vlash_optimization'] = vlash_cfg
 
     env = ConfigEnv(**merged_env)
     inference = ConfigInference(**merged_inf)
@@ -264,4 +299,9 @@ if __name__ == "__main__":
     print("=== Inference basic ===")
     print("policy_type:", cfg.inference.policy_type)
     print("device:", cfg.inference.device)
-    print("arm_state_keys",cfg.env.arm_state_keys)
+    print("arm_state_keys", cfg.env.arm_state_keys)
+    print("=== VLASH Optimization ===")
+    print("use_torch_compile:", cfg.inference.vlash_optimization.use_torch_compile)
+    print("compile_mode:", cfg.inference.vlash_optimization.compile_mode)
+    print("use_async_inference:", cfg.inference.vlash_optimization.use_async_inference)
+    print("inference_overlap_steps:", cfg.inference.vlash_optimization.inference_overlap_steps)

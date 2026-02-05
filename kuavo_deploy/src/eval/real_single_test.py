@@ -49,9 +49,11 @@ from std_msgs.msg import Bool
 import rospy
 import threading
 
-from kuavo_deploy.config import KuavoConfig
+from kuavo_deploy.config import KuavoConfig, VLASHOptimizationConfig
 from kuavo_deploy.utils.logging_utils import setup_logger
 from kuavo_deploy.kuavo_service.client import PolicyClient
+from kuavo_deploy.utils.inference_utils import warmup_policy, compile_policy
+from kuavo_deploy.utils.async_manager import AsyncInferenceManager, SyncInferenceManager
 from lerobot.processor import PolicyAction, PolicyProcessorPipeline
 from lerobot.policies.factory import make_pre_post_processors
 
@@ -74,16 +76,19 @@ stop_flag = threading.Event()
 pause_flag = threading.Event()
 
 
-def setup_policy(pretrained_path, policy_type, device=torch.device("cuda")):
+def setup_policy(pretrained_path, policy_type, device=torch.device("cuda"), 
+                 vlash_config: VLASHOptimizationConfig = None):
     """
     Set up and load the policy model.
     
     Args:
         pretrained_path: Path to the checkpoint
         policy_type: Type of policy ('diffusion' or 'act')
+        device: Target device for inference
+        vlash_config: VLASH optimization configuration (optional)
         
     Returns:
-        Loaded policy model and device
+        Loaded policy model
     """
     
     if device.type == 'cpu':
@@ -104,10 +109,27 @@ def setup_policy(pretrained_path, policy_type, device=torch.device("cuda")):
     policy.eval()
     policy.to(device)
     policy.reset()
+    
     # Log model info
     log_model.info(f"Model loaded from {pretrained_path}")
     log_model.info(f"Model n_obs_steps: {policy.config.n_obs_steps}")
     log_model.info(f"Model device: {device}")
+    
+    # Apply VLASH optimizations if configured
+    if vlash_config is not None and vlash_config.use_torch_compile:
+        log_model.info(f"Applying torch.compile optimization (mode: {vlash_config.compile_mode})...")
+        try:
+            torch.set_float32_matmul_precision("high")
+            policy = torch.compile(policy, mode=vlash_config.compile_mode)
+            log_model.info(f"torch.compile applied successfully")
+            
+            # Warmup the compiled policy
+            if vlash_config.warmup_steps > 0:
+                log_model.info(f"Warming up compiled policy ({vlash_config.warmup_steps} steps)...")
+                warmup_time = warmup_policy(policy, device, vlash_config.warmup_steps)
+                log_model.info(f"Warmup completed in {warmup_time:.2f}s")
+        except Exception as e:
+            log_model.warning(f"torch.compile failed: {e}. Using original policy.")
     
     return policy
 
@@ -136,10 +158,42 @@ def main(config: KuavoConfig, env: gym.Env):
     # Select your device
     device = torch.device(cfg.device)
 
-    policy = setup_policy(pretrained_path, policy_type, device)
+    # Get VLASH optimization config
+    vlash_config = cfg.vlash_optimization
+    log_model.info(f"VLASH optimization: torch_compile={vlash_config.use_torch_compile}, async_inference={vlash_config.use_async_inference}")
+
+    policy = setup_policy(pretrained_path, policy_type, device, vlash_config)
     # preprocessor = PolicyProcessorPipeline.from_pretrained(pretrained_path, config_filename="policy_preprocessor.json")
     # postprocessor = PolicyProcessorPipeline.from_pretrained(pretrained_path, config_filename="policy_postprocessor.json")
     preprocessor, postprocessor = make_pre_post_processors(None, Path(str(pretrained_path).split("/epoch", 1)[0]))
+
+    # Initialize inference manager based on VLASH config
+    inference_manager = None
+    if vlash_config.use_async_inference:
+        # Determine n_action_steps: use override if provided, otherwise use model config
+        n_action_steps = vlash_config.n_action_steps_override
+        if n_action_steps <= 0:
+            # Try to get from policy config (chunk_size for ACT)
+            if hasattr(policy, 'config'):
+                if hasattr(policy.config, 'chunk_size'):
+                    n_action_steps = policy.config.chunk_size
+                elif hasattr(policy.config, 'n_action_steps'):
+                    n_action_steps = policy.config.n_action_steps
+                else:
+                    n_action_steps = 20  # Default fallback
+            else:
+                n_action_steps = 20
+        
+        inference_manager = AsyncInferenceManager(
+            policy=policy,
+            n_action_steps=n_action_steps,
+            overlap_steps=vlash_config.inference_overlap_steps,
+            device=device,
+            use_future_state=vlash_config.use_future_state_awareness,
+        )
+        log_model.info(f"Async inference enabled: n_action_steps={n_action_steps}, "
+                       f"overlap_steps={vlash_config.inference_overlap_steps}, "
+                       f"future_state={vlash_config.use_future_state_awareness}")
 
     # Initialize evaluation environment to render two observation types:
     # an image of the scene and state/position of the agent.
@@ -168,6 +222,8 @@ def main(config: KuavoConfig, env: gym.Env):
     for episode in tqdm(range(eval_episodes), desc="Evaluating model", unit="episode"):
         # Reset the policy and environments to prepare for rollout
         policy.reset()
+        if inference_manager is not None:
+            inference_manager.reset()
         observation, info = env.reset(seed=episode+start_seed)
         observation = preprocessor(observation)
         # log_file.write(f"~~~~~~~~~~~~~~~~~~preprocess observation ok!~~~~~~~~~~~~~~~~~~~~~~~~~~\n")
@@ -197,9 +253,16 @@ def main(config: KuavoConfig, env: gym.Env):
                 
                 start_time = time.time()
                 
-                with torch.inference_mode():
-                    action = policy.select_action(observation)
-                action = postprocessor(action)
+                # Use inference manager if available, otherwise use original logic
+                if inference_manager is not None:
+                    # Async inference: manager handles chunking and timing
+                    action = inference_manager.get_action(observation, None, postprocessor)
+                else:
+                    # Original synchronous inference
+                    with torch.inference_mode():
+                        action = policy.select_action(observation)
+                    action = postprocessor(action)
+                
                 action_infer_time = time.time()
                 log_model.debug(f"action infer time: {action_infer_time - start_time:.3f}s")
                 average_action_infer_time += action_infer_time - start_time
@@ -252,6 +315,14 @@ def main(config: KuavoConfig, env: gym.Env):
         log_model.info(f"average action infer time: {average_action_infer_time / step:.3f}s")
         log_model.info(f"average step time: {average_step_time / step:.3f}s")
         log_model.info(f"average sleep time: {env.average_sleep_time / step:.3f}s")
+        
+        # Log inference manager statistics if using async mode
+        if inference_manager is not None:
+            stats = inference_manager.get_statistics()
+            log_model.info(f"[Async Inference Stats] total_inferences={stats['total_inferences']}, "
+                           f"mean_time={stats['mean_inference_time']:.3f}s, "
+                           f"min_time={stats['min_inference_time']:.3f}s, "
+                           f"max_time={stats['max_inference_time']:.3f}s")
         
         
         # Encode all frames into a mp4 video.
