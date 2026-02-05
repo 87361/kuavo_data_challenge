@@ -1,3 +1,6 @@
 [submodule "third_party/lerobot"]
 	path = third_party/lerobot
 	url = https://github.com/87361/lerobot.git
+[submodule "third_party/vlash"]
+	path = third_party/vlash
+	url = https://github.com/mit-han-lab/vlash.git
