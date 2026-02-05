@@ -22,7 +22,6 @@ from kuavo_train.wrapper.policy.diffusion.transformer_diffusion import Transform
 # diffusers scheduler classes (factory expects these names)
 from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
-from diffusers import StableDiffusion3Pipeline
 OBS_DEPTH = "observation.depth"
 
 

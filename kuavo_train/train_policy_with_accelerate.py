@@ -1,3 +1,6 @@
+import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"  # Avoid tokenizers fork warning
+
 import lerobot_patches.custom_patches  # Ensure custom patches are applied, DON'T REMOVE THIS LINE!
 from lerobot.configs.policies import PolicyFeature
 from typing import Any
@@ -25,6 +28,7 @@ from lerobot.utils.random_utils import set_seed
 from lerobot.policies.factory import make_pre_post_processors
 from kuavo_train.wrapper.policy.diffusion.DiffusionPolicyWrapper import CustomDiffusionPolicyWrapper
 from kuavo_train.wrapper.policy.act.ACTPolicyWrapper import CustomACTPolicyWrapper
+from kuavo_train.wrapper.policy.pi05.PI05PolicyWrapper import CustomPI05PolicyWrapper
 from kuavo_train.wrapper.dataset.LeRobotDatasetWrapper import CustomLeRobotDataset
 from kuavo_train.utils.augmenter import crop_image, resize_image, DeterministicAugmenterColor
 from kuavo_train.utils.utils import save_rng_state, load_rng_state
@@ -110,6 +114,7 @@ def build_policy(name, policy_cfg):
     policy = {
         "diffusion": CustomDiffusionPolicyWrapper,
         "act": CustomACTPolicyWrapper,
+        "pi05": CustomPI05PolicyWrapper,
     }[name](policy_cfg)
     return policy
 
@@ -212,6 +217,19 @@ def remove_aug_step(pipeline, step_to_remove):
 @hydra.main(config_path="../configs/policy/", config_name="diffusion_config", version_base=None)
 def main(cfg: DictConfig):
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
+    
+    # Determine mixed precision setting
+    # Pi05 uses bfloat16 internally, so we use "no" for mixed_precision to avoid conflicts
+    # Other policies can use fp16 if use_amp is enabled
+    policy_dtype = cfg.policy.get("dtype", "float32")
+    if policy_dtype == "bfloat16":
+        # Pi05 handles bfloat16 internally, don't use accelerate's mixed precision
+        mixed_precision = "no"
+    elif cfg.policy.get("use_amp", False):
+        mixed_precision = "fp16"
+    else:
+        mixed_precision = "no"
+    
     # Initialize Accelerator
     accelerator = accelerate.Accelerator(
         gradient_accumulation_steps=cfg.training.accumulation_steps,
@@ -219,7 +237,7 @@ def main(cfg: DictConfig):
         # log_with="tensorboard",             # Disable logging
         device_placement=True,                # Explicitly enable device placement
         step_scheduler_with_optimizer=False,  # A fix to the stepping logic as accelerate might make this thread-unsafe.
-        mixed_precision="fp16" if cfg.policy.get("use_amp", False) else "no",
+        mixed_precision=mixed_precision,
         kwargs_handlers=[ddp_kwargs]          # transfer DDP kwargs
     )
 

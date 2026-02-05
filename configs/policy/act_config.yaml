@@ -19,9 +19,9 @@ root: "/your/path/to/your/lerobotdata/lerobot"  # Locally converted lerobot data
 training:
     output_directory: "outputs/train/${task}/${method}"  # Training parameters default output path. Do not modify this structure
     seed: 2025  # Data augmentation and training seed. Used for easier result reproduction
-    max_epoch: 500  # Max trainign epoch, used to control learning rate controller. Related to max_training_step beneath
+    max_epoch: 20  # Max trainign epoch, used to control learning rate controller. Related to max_training_step beneath
 
-    save_freq_epoch: 10  # Training parameter save frequency. 10 epoch per saved weights
+    save_freq_epoch: 5  # Training parameter save frequency. 10 epoch per saved weights
     log_freq: 1  # Progress bar refresh frequency. 1 = Every iteration step.
     device: "cuda" # Training device. Single GPU only by default. Systems with multiple GPU's please use CUDA_VISIBLE_DEVICES=6 as an envionment variable. cuda:6 might not work.
     accumulation_steps: 1  # Grad accumulation step

@@ -1,0 +1,187 @@
+hydra: # Hydra config directory, for parameter checking only
+  run:
+    dir: ./outputs/train_hydra_save/singlerun/${now:%Y%m%d_%H%M%S}  # Single run root dir
+  sweep:
+    dir: ./outputs/train_hydra_save/multirun/${now:%Y%m%d_%H%M%S}  # sweep root dir
+    subdir: ${hydra:job.override_dirname}
+
+
+task: "your_task_name"  # Custom task name. If using huggingface datasets instead of local dataset, please specify, such as pusht, aloha_sim_insertion_human etc.
+method: "your_method_name"  # Custom method name
+timestamp: ${now:%Y%m%d_%H%M%S}  # Auto-obtained timestamp
+# The training parameters will be saved at outputs/train/<task>/<method>/<timestamp>
+repoid: "lerobot/${task}"  # Newer versions of lerobot require this, for lerobot reference only. Not actually used elsewhere.
+root: "/your/path/to/your/lerobotdata/lerobot"  # Locally converted lerobot dataset directory
+# root: null  # If using huggingface datasets instead of local dataset, please specify in task, such as pusht, aloha_sim_insertion_human.
+# Uncomment and leave that to null in that case. This will then use their cloud downloads
+
+# Training Configurations
+training:
+    output_directory: "outputs/train/${task}/${method}"  # Training parameters default output path. Do not modify this structure
+    seed: 2025  # Data augmentation and training seed. Used for easier result reproduction
+    max_epoch: 20  # Max training epoch, used to control learning rate controller. Related to max_training_step beneath
+
+    save_freq_epoch: 5  # Training parameter save frequency. 5 epoch per saved weights
+    log_freq: 1  # Progress bar refresh frequency. 1 = Every iteration step.
+    device: "cuda" # Training device. Single GPU only by default. Systems with multiple GPU's please use CUDA_VISIBLE_DEVICES=6 as an environment variable. cuda:6 might not work.
+    accumulation_steps: 1  # Grad accumulation step
+    ema_power: 0.75  # This parameter can be used if the EMA (Equation of Mobility) moving exponential average method is employed.
+    # However, current testing shows that using EMA causes performance degradation, so it is no longer supported in the code.
+
+    batch_size: 8  # Batch size. Pi05 requires more memory, so smaller batch size is recommended. Adjust as needed.
+    num_workers: 4  # dataloader's num_workers. Adjust as needed per your computer's performance. Setting it too high might lock up your computer
+    drop_last: False  # Whether to drop the last incomplete batch
+
+    # Max training step. Used to control the learning rate adjuster. If `max_training_step` is specified, it will take precedence
+    # otherwise, this value will be automatically determined based on `max_epoch` mentioned above. ONLY one of the two will take effect!
+    max_training_step: null
+
+    # resume training
+    resume: false
+    resume_timestamp: "run_20251118_144927"  # If enabled, it will pull the last epoch from outputs/train/<task>/<method>/<resume_timestamp> to continue training
+
+    scheduler_name: cosine  # The learning rate tuner name. Takes effect only if the scheduler is not included in the policy config
+    # Otherwise, the policy's built-in tuner will be used. Related parameters will also be listed in the policy section below.
+    scheduler_warmup_steps: 5000  # Learning rate warm up steps
+
+
+    # Data augmentation related config
+    RGB_Augmenter:
+      enable: True
+      max_num_transforms: 1
+      random_order: True
+      tfs:
+        notransform:
+          weight: 3.0  # Weight
+          type: "Identity"
+          kwargs: {}
+        brightness:
+          weight: 1.0
+          type: "ColorJitter"
+          kwargs: {"brightness": [0.5, 1.5]}
+        contrast:
+          weight: 1.0
+          type: "ColorJitter"
+          kwargs: {"contrast": [0.5, 1.5]}
+        saturation:
+          weight: 1.0
+          type: "ColorJitter"
+          kwargs: {"saturation": [0.5, 1.5]}
+        hue:
+          weight: 1.0
+          type: "ColorJitter"
+          kwargs: {"hue": [-0.05, 0.05]}
+        sharpness:
+          weight: 1.0
+          type: "SharpnessJitter"
+          kwargs: {"sharpness": [0.5, 1.5]}
+        random_mask:
+          weight: 1.0
+          type: RandomMask
+          kwargs:
+            mask_size: [0.1, 0.1]   # h_ratio, w_ratio
+        random_border_cutout:
+          weight: 1.0
+          type: RandomBorderCutout
+          kwargs:
+            cut_ratio: 0.15
+        gaussian_noise:
+          weight: 1.0
+          type: GaussianNoise
+          kwargs:
+            mean: 0.0
+            std: 0.05
+        gamma_correction:
+          weight: 1.0
+          type: GammaCorrection
+          kwargs:
+            gamma: [0.5, 2.0]
+
+policy_name: pi05  # Policy type. Supports diffusion, act, and pi05
+
+# Policy-related Configs
+policy:
+    _target_: kuavo_train.wrapper.policy.pi05.PI05ConfigWrapper.CustomPI05ConfigWrapper  # Used for instantiation
+    
+    # Pi05 基础配置 / Pi05 Basic Configuration
+    paligemma_variant: "gemma_2b"  # VLM模型变体: gemma_300m 或 gemma_2b / VLM model variant
+    action_expert_variant: "gemma_300m"  # Action expert变体 / Action expert variant
+    dtype: "bfloat16"  # 精度: bfloat16 或 float32，bfloat16节省显存 / Precision: bfloat16 saves memory
+    
+    # 时序配置 / Temporal Configuration
+    n_obs_steps: 1  # 观察步数 / Number of observation steps
+    chunk_size: 50  # 预测的动作序列长度 / Length of predicted action sequence
+    n_action_steps: 50  # 执行的动作步数 / Number of action steps to execute
+    
+    # 状态和动作维度 / State and Action Dimensions
+    # 根据实际机器人关节数调整 / Adjust according to actual robot joint count
+    max_state_dim: 16  # 状态向量最大维度，会填充到此维度 / Maximum state dimension, will be padded
+    max_action_dim: 16  # 动作向量最大维度，会填充到此维度 / Maximum action dimension, will be padded
+    
+    # Flow Matching 参数 / Flow Matching Parameters
+    num_inference_steps: 10  # 推理时的去噪步数，越多越精确但越慢 / Denoising steps during inference
+    time_sampling_beta_alpha: 1.5
+    time_sampling_beta_beta: 1.0
+    time_sampling_scale: 0.999
+    time_sampling_offset: 0.001
+    min_period: 4e-3
+    max_period: 4.0
+    
+    # 图像配置 / Image Configuration
+    image_resolution: [224, 224]  # 图像分辨率，PaliGemma使用224x224 / Image resolution
+    empty_cameras: 0  # 空相机数量，用于填充 / Number of empty cameras for padding
+    
+    # Tokenizer 配置 / Tokenizer Configuration
+    tokenizer_max_length: 200  # Pi05使用200 tokens（包含状态文本）/ Pi05 uses 200 tokens (includes state text)
+    
+    # 归一化配置 / Normalization Configuration
+    # Pi05 使用 QUANTILES 归一化 STATE 和 ACTION / Pi05 uses QUANTILES for STATE and ACTION
+    normalization_mapping:
+      VISUAL: 
+        _target_: lerobot.configs.types.NormalizationMode
+        value: IDENTITY
+      STATE: 
+        _target_: lerobot.configs.types.NormalizationMode
+        value: QUANTILES
+      ACTION: 
+        _target_: lerobot.configs.types.NormalizationMode
+        value: QUANTILES
+      DEPTH: 
+        _target_: lerobot.configs.types.NormalizationMode
+        value: MIN_MAX
+    
+    # 训练设置 / Training Settings
+    gradient_checkpointing: true  # 启用梯度检查点以节省显存 / Enable gradient checkpointing to save memory
+    compile_model: false  # 是否使用torch.compile优化 / Whether to use torch.compile optimization
+    compile_mode: "max-autotune"  # Torch compile模式 / Torch compile mode
+    
+    # 优化器设置 / Optimizer Settings
+    optimizer_lr: 2.5e-5  # 学习率 / Learning rate
+    optimizer_betas: [0.9, 0.95]
+    optimizer_eps: 1e-8
+    optimizer_weight_decay: 0.01
+    optimizer_grad_clip_norm: 1.0
+    
+    # 学习率调度器设置 / Scheduler Settings
+    scheduler_warmup_steps: 5000  # 预热步数 / Warmup steps
+    scheduler_decay_steps: 30000  # 衰减步数 / Decay steps
+    scheduler_decay_lr: 2.5e-6  # 最终学习率 / Final learning rate
+    
+    # 自定义配置 / Custom Configurations
+    custom:
+      # LoRA 微调配置 / LoRA Fine-tuning Configuration
+      use_lora: true  # 是否启用LoRA微调 / Whether to enable LoRA fine-tuning
+      lora_rank: 16  # LoRA秩，越大参数越多 / LoRA rank, larger means more parameters
+      lora_alpha: 32.0  # LoRA缩放因子，通常为rank的2倍 / LoRA scaling factor, usually 2x rank
+      lora_dropout: 0.05  # LoRA dropout
+      lora_target_modules: ["q_proj", "v_proj", "k_proj", "o_proj"]  # LoRA目标模块 / LoRA target modules
+      freeze_vision_tower: true  # 冻结视觉编码器(SigLIP) / Freeze vision encoder (SigLIP)
+      
+      # 深度图像支持 / Depth Image Support
+      use_depth: false  # 是否使用深度图像 / Whether to use depth images
+      depth_backbone: resnet18  # 深度图像骨干网络 / Depth image backbone network
+      
+      # 任务描述 / Task Description
+      # Pi05需要任务描述作为语言条件 / Pi05 requires task description as language condition
+      default_task: "Grasp the toys and sort them: place all animal toys into the right basket, and place all car toys into the left basket."  # 默认任务描述 / Default task description
+

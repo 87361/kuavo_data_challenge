@@ -217,3 +217,9 @@ ana.py
 *.tar
 error.txt
 obs.png
+*.mp4
+*.safetensors
+*.parquet
+*.bag
+*.zip
+=0.10.0

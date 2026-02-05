@@ -37,6 +37,7 @@ from tqdm import tqdm
 
 from kuavo_train.wrapper.policy.diffusion.DiffusionPolicyWrapper import CustomDiffusionPolicyWrapper
 from kuavo_train.wrapper.policy.act.ACTPolicyWrapper import CustomACTPolicyWrapper
+from kuavo_train.wrapper.policy.pi05.PI05PolicyWrapper import CustomPI05PolicyWrapper
 from lerobot.policies.act.modeling_act import ACTPolicy
 from lerobot.utils.random_utils import set_seed
 import datetime
@@ -93,6 +94,8 @@ def setup_policy(pretrained_path, policy_type, device=torch.device("cuda")):
         policy = CustomDiffusionPolicyWrapper.from_pretrained(Path(pretrained_path),strict=True)
     elif policy_type == 'act':
         policy = CustomACTPolicyWrapper.from_pretrained(Path(pretrained_path),strict=True)
+    elif policy_type == 'pi05':
+        policy = CustomPI05PolicyWrapper.from_pretrained(Path(pretrained_path),strict=True)
     elif policy_type == 'client':
         policy = PolicyClient()
     else:
