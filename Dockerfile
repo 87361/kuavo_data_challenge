@@ -42,10 +42,10 @@ WORKDIR /root/kuavo_data_challenge
 COPY . .
 
 # 解压 Conda 环境并安装项目
-RUN if [ -f "icra_env.tar.gz" ]; then \
+RUN if [ -f "pi05_env.tar.gz" ]; then \
         mkdir -p ./myenv && \
-        tar -xzf icra_env.tar.gz -C ./myenv && \
-        rm icra_env.tar.gz; \
+        tar -xzf pi05_env.tar.gz -C ./myenv && \
+        rm pi05_env.tar.gz; \
     fi && \
     /bin/bash -c "\
         source ./myenv/bin/activate && \
