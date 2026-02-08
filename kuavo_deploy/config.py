@@ -183,6 +183,7 @@ class ConfigInference:
     epoch: int = 1
     max_episode_steps: int = 1000
     env_name: str = "Kuavo-Sim"
+    task_description: str = ""  # Task description for PI05 model (language prompt)
     
     # VLASH optimization config (new)
     vlash_optimization: VLASHOptimizationConfig = field(default_factory=VLASHOptimizationConfig)

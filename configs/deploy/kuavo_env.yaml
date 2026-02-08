@@ -35,10 +35,9 @@ env:
     depth_l: ["/cam_l/depth/image_rect_raw/compressedDepth", "CompressedImage", 30, *IMGSIZE, *DEPTHRANGE]  # Left wrist depth topic, select if depth is needed
     depth_r: ["/cam_r/depth/image_rect_raw/compressedDepth", "CompressedImage", 30, *IMGSIZE, *DEPTHRANGE]  # Right wrist depth topic, select if depth is needed
     joint_q: ["/sensors_data_raw", "sensorsData", 500]  # Joint angle topic, COMPULSORY
-    # 以下末端执行器 topic 在诊断时注释掉（仿真环境中没有发布数据）
-    # qiangnao: ["/dexhand/state", "JointState", 500]  # End-effector topic for dexterous hand
-    # leju_claw: ["/leju_claw_state", "lejuClawState", 500]  # End-effector topic for gripper-claw
-    # rq2f85: ["/gripper/state", "JointState", 500]  # End-effector topic for simulator claw
+    qiangnao: ["/dexhand/state", "JointState", 500]  # End-effector topic for dexterous hand
+    leju_claw: ["/leju_claw_state", "lejuClawState", 500]  # End-effector topic for gripper-claw
+    rq2f85: ["/gripper/state", "JointState", 500]  # End-effector topic for simulator claw
   
   arm_state_keys: ["joint_q","gripper"]  # Do not change. Model observation arm state, with joint angles and gripper state.
   frame_alignment: false  # Frame alignment. default=false
@@ -94,6 +93,7 @@ inference:
   start_seed: 42  # Initial seed for each episode
   device: "cuda"  # or "cpu"
   task: "task1"
+  task_description: "Pick and Place"  # Task description for PI05 model (language prompt)
   method: "pi05"
   timestamp: "run_20260203_194626"
   epoch: best  # Which epoch to use from the training weights. I.e. 50, 100, best, etc. Note:Weights will be used from outputs/train/<task>/<method>/<timestamp>/epoch<epoch> to load policy

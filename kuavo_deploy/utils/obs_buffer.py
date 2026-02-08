@@ -93,17 +93,11 @@ class ObsBuffer:
         self.timing = TimingCollector(enabled=enable_timing)
         
         # === 从 KuavoConfig 中提取环境配置 Extract Configuration===
-        # #region agent log
-        import json as _json; open('/home/yly/ICRA-kuavo/kuavo_data_challenge/.cursor/debug.log','a').write(_json.dumps({"hypothesisId":"A","location":"obs_buffer.py:98","message":"config type check","data":{"config_type":str(type(config)),"has_env":hasattr(config,'env'),"is_dict":isinstance(config,dict)},"timestamp":time.time(),"sessionId":"debug-session"})+'\n')
-        # #endregion
         # 兼容两种配置格式: KuavoConfig (有.env属性) 或直接的env配置对象
         if hasattr(config, 'env'):
             env_cfg = config.env
         else:
             env_cfg = config
-        # #region agent log
-        import json as _json; open('/home/yly/ICRA-kuavo/kuavo_data_challenge/.cursor/debug.log','a').write(_json.dumps({"hypothesisId":"B","location":"obs_buffer.py:106","message":"env_cfg type check","data":{"env_cfg_type":str(type(env_cfg)),"is_dict":isinstance(env_cfg,dict)},"timestamp":time.time(),"sessionId":"debug-session"})+'\n')
-        # #endregion
         # 兼容字典和对象两种访问方式的辅助函数
         def get_cfg_val(cfg, key, default=None):
             if isinstance(cfg, dict):

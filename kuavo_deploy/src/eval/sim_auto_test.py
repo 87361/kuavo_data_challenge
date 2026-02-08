@@ -162,11 +162,48 @@ def setup_policy(pretrained_path, policy_type, device=torch.device("cuda")):
     
     return policy
 
+
+def create_task_injecting_preprocessor(preprocessor, task_description, policy_type):
+    """
+    创建一个包装后的 preprocessor，为需要 task 字段的策略自动注入。
+    
+    Create a wrapped preprocessor that auto-injects task field for policies that need it.
+    
+    对于 PI05/PI0 策略：自动将 task_description 注入到 observation 中
+    对于其他策略：直接透传，不做任何修改
+    
+    Args:
+        preprocessor: 原始的 preprocessor 函数
+        task_description: 任务描述字符串
+        policy_type: 策略类型 ('pi05', 'pi0', 'act', 'diffusion' 等)
+    
+    Returns:
+        包装后的 preprocessor 函数（保持统一调用接口）
+    """
+    if policy_type in ["pi05", "pi0"]:  # 需要 task 字段的策略
+        def wrapped_preprocessor(observation):
+            batch_input = {**observation, "task": [task_description]}
+            return preprocessor(batch_input)
+        return wrapped_preprocessor
+    else:
+        return preprocessor  # 其他策略直接返回原始 preprocessor
+
+
 def run_single_episode(config, policy, preprocessor, postprocessor, episode, output_directory):
     """运行单个episode Running a single episode"""
     cfg = config.inference
     seed = cfg.seed
     task = cfg.task
+    # Get task description for PI05 model (default to task name if not specified)
+    task_description = getattr(cfg, 'task_description', None) or task
+    policy_type = cfg.method  # 获取策略类型
+    
+    # 包装 preprocessor，保持调用接口一致
+    # Wrap preprocessor to maintain consistent calling interface
+    wrapped_preprocessor = create_task_injecting_preprocessor(
+        preprocessor, task_description, policy_type
+    )
+    
     # Initialize environment
     env = gym.make(
         config.env.env_name,
@@ -225,9 +262,11 @@ def run_single_episode(config, policy, preprocessor, postprocessor, episode, out
             return 0
         
         start_time = time.time()
-        observation = preprocessor(observation)
+        # 使用包装后的 preprocessor，保持统一调用接口
+        # Use wrapped preprocessor for consistent calling interface
+        processed_obs = wrapped_preprocessor(observation)
         with torch.inference_mode():
-            action = policy.select_action(observation)
+            action = policy.select_action(processed_obs)
         log_model.info(f"Step {step}: predict action {action}")
         action = postprocessor(action)
         # print(f"action: {action}, action.shape: {action.shape}, action min: {action.min()}, action max: {action.max()}")
