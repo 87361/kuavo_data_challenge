@@ -77,10 +77,10 @@ class CustomPI05ConfigWrapper(PI05Config):
             ]
         if not hasattr(self, 'lora_modules_to_save'):
             # PI05-specific layers that should be fully trainable (critical for action generation)
+            # Note: state_proj/state_mlp_in/state_mlp_out don't exist in PI05, removed
             self.lora_modules_to_save = [
                 "action_in_proj", "action_out_proj",      # Action projection layers
                 "time_mlp_in", "time_mlp_out",            # Time MLP layers
-                "state_proj", "state_mlp_in", "state_mlp_out",  # State projection layers
             ]
         if not hasattr(self, 'freeze_vision_tower'):
             self.freeze_vision_tower = True

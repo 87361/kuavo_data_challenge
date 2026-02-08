@@ -56,17 +56,20 @@ class CustomPI05ModelWrapper(PI05Pytorch):
             self._init_depth_branch(config)
     
     def _apply_lora(self, config):
-        """Apply LoRA to the PaliGemma language model and Gemma Expert.
+        """Apply LoRA to the entire paligemma_with_expert model (VLASH style).
         
-        LoRA is applied to attention and MLP layers. Additionally, PI05-specific layers
-        (action_proj, time_mlp, state_proj) are set as fully trainable via modules_to_save.
-        This follows the VLASH implementation for proper PI05 fine-tuning.
+        This method follows VLASH's approach:
+        1. Apply LoRA to the entire paligemma_with_expert (single call to get_peft_model)
+        2. Manually unfreeze PI05's top-level critical layers (action_proj, time_mlp)
+           which are NOT inside paligemma_with_expert
+        
+        This ensures proper fine-tuning of both the VLM backbone and action generation layers.
         """
         from peft import TaskType
         
         lora_rank = getattr(config, 'lora_rank', 16)
-        lora_alpha = getattr(config, 'lora_alpha', 16)  # Changed to 16 to match VLASH
-        lora_dropout = getattr(config, 'lora_dropout', 0.0)  # Changed to 0 to match VLASH
+        lora_alpha = getattr(config, 'lora_alpha', 16)  # Match VLASH
+        lora_dropout = getattr(config, 'lora_dropout', 0.0)  # Match VLASH
         
         # Expanded target_modules to include MLP layers (matching VLASH)
         default_target_modules = [
@@ -76,28 +79,11 @@ class CustomPI05ModelWrapper(PI05Pytorch):
         ]
         target_modules = getattr(config, 'lora_target_modules', default_target_modules)
         
-        # Ensure target_modules is a plain Python list (convert from ListConfig if needed)
+        # Ensure target_modules is a plain Python list
         if isinstance(target_modules, str):
             target_modules = [target_modules]
         else:
-            # Convert ListConfig or other iterables to plain list for JSON serialization
             target_modules = list(target_modules)
-        
-        # PI05-specific layers that should be fully trainable (not just LoRA)
-        # These are critical for action generation and must not be frozen
-        default_modules_to_save = [
-            "action_in_proj", "action_out_proj",      # Action projection layers
-            "time_mlp_in", "time_mlp_out",            # Time MLP layers
-            "state_proj", "state_mlp_in", "state_mlp_out",  # State projection layers
-        ]
-        modules_to_save = getattr(config, 'lora_modules_to_save', default_modules_to_save)
-        
-        # Ensure modules_to_save is a plain Python list
-        if modules_to_save:
-            if isinstance(modules_to_save, str):
-                modules_to_save = [modules_to_save]
-            else:
-                modules_to_save = list(modules_to_save)
         
         lora_config = LoraConfig(
             r=lora_rank,
@@ -105,36 +91,81 @@ class CustomPI05ModelWrapper(PI05Pytorch):
             target_modules=target_modules,
             lora_dropout=lora_dropout,
             bias="none",
-            task_type=TaskType.FEATURE_EXTRACTION,  # Changed from CAUSAL_LM to match VLASH
-            modules_to_save=modules_to_save if modules_to_save else None,  # Added for PI05 layers
+            task_type=TaskType.FEATURE_EXTRACTION,  # Match VLASH
         )
         
         logging.info(f"LoRA config: rank={lora_rank}, alpha={lora_alpha}, dropout={lora_dropout}")
         logging.info(f"LoRA target_modules: {target_modules}")
-        logging.info(f"LoRA modules_to_save (fully trainable): {modules_to_save}")
         
-        # Apply LoRA to PaliGemma language model
+        # Apply LoRA to the entire paligemma_with_expert (VLASH style - single call)
         try:
-            self.paligemma_with_expert.paligemma.language_model = get_peft_model(
-                self.paligemma_with_expert.paligemma.language_model, 
+            self.paligemma_with_expert = get_peft_model(
+                self.paligemma_with_expert, 
                 lora_config
             )
-            logging.info(f"Applied LoRA to PaliGemma language model with rank={lora_rank}")
+            logging.info(f"Applied LoRA to entire paligemma_with_expert with rank={lora_rank}")
         except Exception as e:
-            logging.warning(f"Failed to apply LoRA to PaliGemma language model: {e}")
+            logging.warning(f"Failed to apply LoRA to paligemma_with_expert: {e}")
+            # Fallback: try applying to sub-modules separately
+            logging.info("Attempting fallback: applying LoRA to sub-modules separately...")
+            try:
+                self.paligemma_with_expert.paligemma.language_model = get_peft_model(
+                    self.paligemma_with_expert.paligemma.language_model, 
+                    lora_config
+                )
+                logging.info(f"Applied LoRA to PaliGemma language model")
+            except Exception as e2:
+                logging.warning(f"Failed to apply LoRA to PaliGemma language model: {e2}")
+            
+            try:
+                self.paligemma_with_expert.gemma_expert = get_peft_model(
+                    self.paligemma_with_expert.gemma_expert, 
+                    lora_config
+                )
+                logging.info(f"Applied LoRA to Gemma Expert")
+            except Exception as e2:
+                logging.warning(f"Failed to apply LoRA to Gemma Expert: {e2}")
         
-        # Apply LoRA to Gemma Expert
-        try:
-            self.paligemma_with_expert.gemma_expert = get_peft_model(
-                self.paligemma_with_expert.gemma_expert, 
-                lora_config
-            )
-            logging.info(f"Applied LoRA to Gemma Expert with rank={lora_rank}")
-        except Exception as e:
-            logging.warning(f"Failed to apply LoRA to Gemma Expert: {e}")
+        # CRITICAL: Manually unfreeze PI05's top-level action and time layers
+        # These layers are at PI05Pytorch level (self), NOT inside paligemma_with_expert
+        # PEFT's modules_to_save only works for modules INSIDE the wrapped model
+        self._unfreeze_pi05_critical_layers()
         
         # Print trainable parameters info
         self._print_trainable_params()
+    
+    def _unfreeze_pi05_critical_layers(self):
+        """Manually unfreeze PI05's critical action and time layers.
+        
+        These layers are at the top level of PI05Pytorch (inherited by this wrapper)
+        and are NOT inside paligemma_with_expert. PEFT's modules_to_save cannot
+        reach them, so we must manually set requires_grad=True.
+        
+        Critical layers:
+        - action_in_proj: Projects noisy actions into embedding space
+        - action_out_proj: Projects embeddings back to action space
+        - time_mlp_in: Time embedding input MLP
+        - time_mlp_out: Time embedding output MLP
+        """
+        critical_layers = ['action_in_proj', 'action_out_proj', 'time_mlp_in', 'time_mlp_out']
+        unfrozen_count = 0
+        
+        logging.info("Unfreezing PI05 critical layers (action/time projections)...")
+        
+        for layer_name in critical_layers:
+            if hasattr(self, layer_name):
+                layer = getattr(self, layer_name)
+                layer_params = 0
+                for param in layer.parameters():
+                    if not param.requires_grad:
+                        param.requires_grad = True
+                    layer_params += param.numel()
+                unfrozen_count += layer_params
+                logging.info(f"  Unfroze {layer_name}: {layer_params:,} parameters")
+            else:
+                logging.warning(f"  WARNING: {layer_name} not found!")
+        
+        logging.info(f"Total unfrozen in critical layers: {unfrozen_count:,} parameters")
     
     def _freeze_vision_tower(self):
         """Freeze the vision tower (SigLIP) parameters.
@@ -208,8 +239,10 @@ class CustomPI05ModelWrapper(PI05Pytorch):
         
         This helps verify that:
         1. LoRA adapters are trainable
-        2. PI05-specific layers (action_proj, time_mlp, state_proj) are trainable
+        2. PI05-specific layers (action_proj, time_mlp) are trainable
         3. Base model parameters are frozen
+        
+        Note: PI05 does NOT have state_proj layers (unlike PI0)
         """
         trainable_params = 0
         all_params = 0
@@ -218,7 +251,6 @@ class CustomPI05ModelWrapper(PI05Pytorch):
         lora_params = 0
         action_params = 0
         time_params = 0
-        state_params = 0
         other_trainable = 0
         
         for name, param in self.named_parameters():
@@ -235,8 +267,6 @@ class CustomPI05ModelWrapper(PI05Pytorch):
                     action_params += num_params
                 elif 'time' in name.lower():
                     time_params += num_params
-                elif 'state' in name.lower():
-                    state_params += num_params
                 else:
                     other_trainable += num_params
         
@@ -248,17 +278,18 @@ class CustomPI05ModelWrapper(PI05Pytorch):
         logging.info(f"  LoRA adapters: {lora_params:,}")
         logging.info(f"  Action layers: {action_params:,}")
         logging.info(f"  Time layers: {time_params:,}")
-        logging.info(f"  State layers: {state_params:,}")
         logging.info(f"  Other trainable: {other_trainable:,}")
         logging.info("=" * 60)
         
-        # Warn if critical layers seem to be missing
+        # Warn if critical layers seem to be missing (CRITICAL for PI05 to work!)
         if action_params == 0:
-            logging.warning("WARNING: No action-related parameters are trainable!")
+            logging.warning("CRITICAL WARNING: No action-related parameters are trainable!")
+            logging.warning("  -> action_in_proj/action_out_proj are NOT being trained!")
+            logging.warning("  -> Model will NOT learn to generate actions correctly!")
         if time_params == 0:
-            logging.warning("WARNING: No time-related parameters are trainable!")
-        if state_params == 0:
-            logging.warning("WARNING: No state-related parameters are trainable!")
+            logging.warning("CRITICAL WARNING: No time-related parameters are trainable!")
+            logging.warning("  -> time_mlp_in/time_mlp_out are NOT being trained!")
+            logging.warning("  -> Model will NOT learn time-dependent denoising!")
     
     def get_trainable_parameters(self):
         """Return only trainable parameters for optimizer."""

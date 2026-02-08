@@ -189,15 +189,13 @@ policy:
         - fc2          # 全连接层 / Fully connected layer
       
       # PI05关键层（完全可训练，不使用LoRA）/ PI05 critical layers (fully trainable, not LoRA)
-      # 这些层对动作生成至关重要，必须完全可训练 / These layers are critical for action generation
+      # 这些层对动作生成至关重要，在代码中手动解冻 / These layers are critical for action generation, manually unfrozen in code
+      # 注意：state_proj/state_mlp_in/state_mlp_out 在PI05中不存在，已移除 / Note: state_proj layers don't exist in PI05, removed
       lora_modules_to_save:
         - action_in_proj      # 动作输入投影 / Action input projection
         - action_out_proj     # 动作输出投影 / Action output projection
         - time_mlp_in         # 时间MLP输入 / Time MLP input
         - time_mlp_out        # 时间MLP输出 / Time MLP output
-        - state_proj          # 状态投影 / State projection
-        - state_mlp_in        # 状态MLP输入 / State MLP input
-        - state_mlp_out       # 状态MLP输出 / State MLP output
       
       freeze_vision_tower: true  # 冻结视觉编码器(SigLIP) / Freeze vision encoder (SigLIP)
       
