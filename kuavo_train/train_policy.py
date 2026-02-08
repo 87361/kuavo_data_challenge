@@ -23,6 +23,7 @@ from lerobot.utils.random_utils import set_seed
 from lerobot.policies.factory import make_pre_post_processors
 from kuavo_train.wrapper.policy.diffusion.DiffusionPolicyWrapper import CustomDiffusionPolicyWrapper
 from kuavo_train.wrapper.policy.act.ACTPolicyWrapper import CustomACTPolicyWrapper
+from kuavo_train.wrapper.policy.pi05.PI05PolicyWrapper import CustomPI05PolicyWrapper
 from kuavo_train.wrapper.dataset.LeRobotDatasetWrapper import CustomLeRobotDataset
 from kuavo_train.utils.augmenter import crop_image, resize_image, DeterministicAugmenterColor
 from kuavo_train.utils.utils import save_rng_state, load_rng_state
@@ -107,6 +108,7 @@ def build_policy(name, policy_cfg):
     policy = {
         "diffusion": CustomDiffusionPolicyWrapper,
         "act": CustomACTPolicyWrapper,
+        "pi05": CustomPI05PolicyWrapper,
     }[name](policy_cfg)
     return policy
 
@@ -206,6 +208,36 @@ def remove_aug_step(pipeline, step_to_remove):
     else:
         print(f"Step {step_to_remove.__class__.__name__} not found in pipeline")
 
+def evaluate(policy, dataloader, preprocessor, device, make_autocast, amp_enabled, is_pi05=False):
+    """Evaluate policy on validation set.
+    
+    Note: We keep policy in training mode to ensure VAE outputs are available
+    for proper loss computation. We only disable gradient computation.
+    """
+    was_training = policy.training
+    # Keep in training mode for VAE to work, but disable gradients
+    policy.train()
+    total_loss = 0.0
+    num_batches = 0
+    
+    with torch.no_grad():
+        for batch in dataloader:
+            batch = preprocessor(batch)
+            # PI0.5: 使用 bfloat16 autocast，与训练保持一致
+            autocast_ctx = torch.autocast(device_type="cuda", dtype=torch.bfloat16) if is_pi05 else make_autocast(amp_enabled)
+            with autocast_ctx:
+                loss, _ = policy.forward(batch)
+            total_loss += loss.item()
+            num_batches += 1
+    
+    # Restore previous mode
+    if was_training:
+        policy.train()
+    else:
+        policy.eval()
+    return total_loss / max(num_batches, 1)
+
+
 @hydra.main(config_path="../configs/policy/", config_name="diffusion_config", version_base=None)
 def main(cfg: DictConfig):
     set_seed(cfg.training.seed)
@@ -216,6 +248,13 @@ def main(cfg: DictConfig):
     writer = SummaryWriter(log_dir=str(output_directory))
 
     device = torch.device(cfg.training.device)
+    
+    # Early stopping config
+    early_stopping_patience = getattr(cfg.training, 'early_stopping_patience', 3)
+    val_split_ratio = getattr(cfg.training, 'val_split_ratio', 0.1)
+
+    # Check if using PI0.5
+    is_pi05 = cfg.policy_name == "pi05"
 
     # Dataset metadata and features
     dataset_metadata = LeRobotDatasetMetadata(cfg.repoid, root=cfg.root)
@@ -226,6 +265,14 @@ def main(cfg: DictConfig):
     input_features = {k: ft for k, ft in features.items() if ft.type is not FeatureType.ACTION}
     output_features = {k: ft for k, ft in features.items() if ft.type is FeatureType.ACTION}
 
+    # PI0.5: Filter out depth features from input
+    if is_pi05:
+        depth_keys = [k for k, ft in input_features.items() if ft.type is FeatureType.DEPTH]
+        for k in depth_keys:
+            del input_features[k]
+        if depth_keys:
+            print(f"PI0.5: Filtered out depth features from input: {depth_keys}")
+
     print(f"Input features: {input_features}")
     print(f"Output features: {output_features}")
 
@@ -234,11 +281,72 @@ def main(cfg: DictConfig):
     print("policy_cfg", policy_cfg)
 
     # Build policy
-    policy = build_policy(cfg.policy_name, policy_cfg)
+    if is_pi05:
+        # PI0.5: Load from pretrained if specified
+        pretrained_name = getattr(policy_cfg, 'pretrained_model_name', None)
+        if pretrained_name:
+            print(f"PI0.5: Loading pretrained model from {pretrained_name}")
+            from lerobot.policies.pi05.modeling_pi05 import PI05Policy
+            policy = PI05Policy.from_pretrained(pretrained_name, strict=False)
+            # Update config with our features
+            policy.config.input_features = policy_cfg.input_features
+            policy.config.output_features = policy_cfg.output_features
+            # Convert to bfloat16 to save GPU memory
+            if torch.cuda.is_bf16_supported():
+                print("PI0.5: Converting model to bfloat16 to save memory")
+                policy = policy.to(dtype=torch.bfloat16)
+            # Apply LoRA for parameter-efficient fine-tuning
+            from peft import LoraConfig, get_peft_model
+            lora_r = getattr(policy_cfg, 'lora_r', 16)
+            lora_alpha = getattr(policy_cfg, 'lora_alpha', 32)
+            lora_dropout = getattr(policy_cfg, 'lora_dropout', 0.05)
+            # Target attention layers in PaliGemma and Gemma expert
+            target_modules = ["q_proj", "v_proj", "k_proj", "o_proj"]
+            lora_config = LoraConfig(
+                r=lora_r,
+                lora_alpha=lora_alpha,
+                target_modules=target_modules,
+                lora_dropout=lora_dropout,
+                bias="none",
+            )
+            policy = get_peft_model(policy, lora_config)
+            trainable_params = sum(p.numel() for p in policy.parameters() if p.requires_grad)
+            total_params = sum(p.numel() for p in policy.parameters())
+            print(f"PI0.5 LoRA: Trainable params: {trainable_params:,} / {total_params:,} ({100*trainable_params/total_params:.2f}%)")
+        else:
+            policy = build_policy(cfg.policy_name, policy_cfg)
+    else:
+        policy = build_policy(cfg.policy_name, policy_cfg)
+
     preprocessor, postprocessor = make_pre_post_processors(policy_cfg, dataset_stats=dataset_metadata.stats)
     preprocessor.save_pretrained(output_directory)
     postprocessor.save_pretrained(output_directory)
-    optimizer, lr_scheduler = build_optimizer_and_scheduler(policy, cfg, dataset_metadata.info["total_frames"])
+    
+    # For PI0.5 with LoRA, build optimizer only for trainable params
+    if is_pi05:
+        trainable_params = [p for p in policy.parameters() if p.requires_grad]
+        optimizer = torch.optim.AdamW(
+            trainable_params,
+            lr=policy_cfg.optimizer_lr,
+            betas=policy_cfg.optimizer_betas,
+            eps=policy_cfg.optimizer_eps,
+            weight_decay=policy_cfg.optimizer_weight_decay,
+        )
+        from diffusers.optimization import get_scheduler as get_diffusers_scheduler
+        if cfg.training.max_training_step is None:
+            total_frames = dataset_metadata.info["total_frames"]
+            updates_per_epoch = (total_frames // (cfg.training.batch_size * cfg.training.accumulation_steps)) + 1
+            num_training_steps = cfg.training.max_epoch * updates_per_epoch
+        else:
+            num_training_steps = cfg.training.max_training_step
+        lr_scheduler = get_diffusers_scheduler(
+            name="cosine",
+            optimizer=optimizer,
+            num_warmup_steps=policy_cfg.scheduler_warmup_steps,
+            num_training_steps=num_training_steps,
+        )
+    else:
+        optimizer, lr_scheduler = build_optimizer_and_scheduler(policy, cfg, dataset_metadata.info["total_frames"])
     
     # Initialize AMP GradScaler if use_amp is True
     amp_requested = bool(getattr(cfg.policy, "use_amp", False))
@@ -320,47 +428,113 @@ def main(cfg: DictConfig):
     delta_timestamps = build_delta_timestamps(dataset_metadata, policy_cfg)
 
     image_transforms = build_augmenter(cfg.training.RGB_Augmenter)
-    dataset = LeRobotDataset(
+    full_dataset = LeRobotDataset(
         cfg.repoid,
         delta_timestamps=delta_timestamps,
         root=cfg.root,
         image_transforms=None,
     )
-    # Training loop
-    aug_step = insert_before_normalizer(preprocessor, AugmentationProcessorStep(image_transforms, dataset.meta.camera_keys))  # just for training
     
-    if hasattr(cfg.policy, "drop_n_last_frames"):
-        shuffle = False
-        sampler = EpisodeAwareSampler(
-            dataset.meta.episodes["dataset_from_index"],
-            dataset.meta.episodes["dataset_to_index"],
-            drop_n_last_frames=cfg.policy.drop_n_last_frames,
-            shuffle=True,
-        )
+    # Split dataset into train and validation
+    total_size = len(full_dataset)
+    val_size = int(total_size * val_split_ratio)
+    train_size = total_size - val_size
+    
+    from torch.utils.data import Subset
+    import numpy as np
+    
+    # Use fixed seed for reproducible split
+    np.random.seed(cfg.training.seed)
+    indices = np.random.permutation(total_size)
+    train_indices = indices[:train_size]
+    val_indices = indices[train_size:]
+    
+    train_dataset = Subset(full_dataset, train_indices)
+    val_dataset = Subset(full_dataset, val_indices)
+    
+    print(f"Dataset split: {train_size} train, {val_size} validation")
+
+    # ===== World Model: pre-extract all states for dynamics targets =====
+    use_world_model = getattr(policy_cfg, 'use_world_model', False) and not is_pi05
+    if use_world_model:
+        print("World Model enabled! Pre-extracting states for dynamics targets...")
+        _hf = full_dataset.hf_dataset
+        # HuggingFace dataset returns list of lists/tensors, need to stack
+        _states_list = _hf['observation.state']
+        _all_states_raw = torch.stack([torch.as_tensor(s, dtype=torch.float32) for s in _states_list])
+        _ep_list = _hf['episode_index']
+        _all_ep_idx = torch.tensor(_ep_list, dtype=torch.long).squeeze(-1)
+        _s_stats = dataset_metadata.stats['observation.state']
+        _s_mean = torch.tensor(_s_stats['mean'], dtype=torch.float32)
+        _s_std  = torch.tensor(_s_stats['std'],  dtype=torch.float32)
+        print(f"  States shape: {_all_states_raw.shape}, "
+              f"Episodes: {_all_ep_idx.max().item() + 1}")
+    # ===================================================================
+    
+    # Training loop
+    aug_step = None
+    if not is_pi05:
+        # PI0.5 has its own image preprocessing, skip custom augmentation
+        aug_step = insert_before_normalizer(preprocessor, AugmentationProcessorStep(image_transforms, full_dataset.meta.camera_keys))  # just for training
     else:
-        shuffle = True
-        sampler = None
+        print("PI0.5: Skipping custom augmentation (PI0.5 has built-in image preprocessing)")
+    
+    # Early stopping variables
+    best_val_loss = float('inf')
+    epochs_without_improvement = 0
     
     for epoch in range(start_epoch, cfg.training.max_epoch):
-        dataloader = DataLoader(
-            dataset,
+        train_dataloader = DataLoader(
+            train_dataset,
             num_workers=cfg.training.num_workers,
             batch_size=cfg.training.batch_size,
-            shuffle=shuffle,
-            sampler=sampler,
+            shuffle=True,
             pin_memory=(device.type != "cpu"),
             drop_last=cfg.training.drop_last,
             prefetch_factor=2 if cfg.training.num_workers > 0 else None,
         )
+        
+        val_dataloader = DataLoader(
+            val_dataset,
+            num_workers=cfg.training.num_workers,
+            batch_size=cfg.training.batch_size,
+            shuffle=False,
+            pin_memory=(device.type != "cpu"),
+            drop_last=False,
+            prefetch_factor=2 if cfg.training.num_workers > 0 else None,
+        )
 
-        epoch_bar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{cfg.training.max_epoch}")
+        epoch_bar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{cfg.training.max_epoch}")
 
         
         total_loss = 0.0
         for batch in epoch_bar:
+            # World Model: save indices BEFORE preprocessing (may be dropped)
+            _batch_indices = batch.get('index', None)
+            if _batch_indices is not None:
+                _batch_indices = _batch_indices.clone()
+
             batch = preprocessor(batch)  # will normalize and put batch to device
-            with make_autocast(amp_enabled):
-                loss, _ = policy.forward(batch)
+
+            # ===== World Model: inject next-state target + warmup =====
+            if use_world_model and _batch_indices is not None:
+                indices = _batch_indices.view(-1)  # (B,)
+                next_idx = torch.clamp(indices + 1, max=len(full_dataset) - 1)
+                same_ep = _all_ep_idx[indices] == _all_ep_idx[next_idx]
+                ns = _all_states_raw[next_idx].clone()
+                ns[~same_ep] = _all_states_raw[indices[~same_ep]]
+                # Normalize same as observation.state (MEAN_STD)
+                ns = (ns - _s_mean) / (_s_std + 1e-8)
+                batch['next_observation.state'] = ns.to(device)
+                # Set warmup coefficient on policy
+                wm_warmup = min(1.0, steps / max(policy_cfg.wm_warmup_steps, 1))
+                policy._wm_warmup_coeff = wm_warmup
+            # =========================================================
+
+            # PI0.5: use autocast bfloat16 for mixed precision
+            pi05_autocast = torch.autocast(device_type="cuda", dtype=torch.bfloat16) if is_pi05 else make_autocast(amp_enabled)
+            with pi05_autocast:
+                loss, loss_dict = policy.forward(batch)
             # Scale loss and backward with AMP if enabled
             scaled_loss = loss / cfg.training.accumulation_steps
             
@@ -382,24 +556,65 @@ def main(cfg: DictConfig):
             if steps % cfg.training.log_freq == 0:
                 writer.add_scalar("train/loss", scaled_loss.item(), steps)
                 writer.add_scalar("train/lr", lr_scheduler.get_last_lr()[0], steps)
+                # World Model: log auxiliary losses
+                if use_world_model and loss_dict:
+                    for k in ('dyn_loss', 'cf_loss', 'wm_warmup'):
+                        if k in loss_dict:
+                            writer.add_scalar(f"train/{k}", loss_dict[k], steps)
                 epoch_bar.set_postfix(loss=f"{scaled_loss.item():.3f}", step=steps, lr=lr_scheduler.get_last_lr()[0])
 
             steps += 1
             total_loss += scaled_loss.item()
         
-        # Update best loss
+        # Validation evaluation
+        if aug_step is not None:
+            remove_aug_step(preprocessor, aug_step)  # Remove augmentation for validation
+        val_loss = evaluate(policy, val_dataloader, preprocessor, device, make_autocast, amp_enabled, is_pi05=is_pi05)
+        if aug_step is not None:
+            aug_step = insert_before_normalizer(preprocessor, AugmentationProcessorStep(image_transforms, full_dataset.meta.camera_keys))  # Re-add for training
+        
+        writer.add_scalar("val/loss", val_loss, epoch)
+        print(f"Epoch {epoch+1}: Train Loss = {total_loss:.4f}, Val Loss = {val_loss:.4f}")
+        
+        # Early stopping check
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            epochs_without_improvement = 0
+            # Save best model
+            best_dir = output_directory / "epochbest"
+            best_dir.mkdir(parents=True, exist_ok=True)
+            if is_pi05:
+                policy.save_pretrained(str(best_dir))
+            else:
+                policy.save_pretrained(best_dir)
+            print(f"  -> New best validation loss! Saved to epochbest")
+        else:
+            epochs_without_improvement += 1
+            print(f"  -> No improvement for {epochs_without_improvement} epoch(s)")
+            
+            if epochs_without_improvement >= early_stopping_patience:
+                print(f"\n🛑 Early stopping triggered! No improvement for {early_stopping_patience} consecutive epochs.")
+                print(f"Best validation loss: {best_val_loss:.4f}")
+                break
+        
+        # Update best training loss (for backward compatibility)
         if total_loss < best_loss:
             best_loss = total_loss
-            # Save best model
-            policy.save_pretrained(output_directory / "epochbest")
+            
         # Save checkpoint every N epochs
         if (epoch + 1) % cfg.training.save_freq_epoch == 0:
-            policy.save_pretrained(output_directory / f"epoch{epoch+1}")
-            # preprocessor.save_pretrained(output_directory)
+            save_dir = output_directory / f"epoch{epoch+1}"
+            save_dir.mkdir(parents=True, exist_ok=True)
+            if is_pi05:
+                policy.save_pretrained(str(save_dir))  # PEFT save
+            else:
+                policy.save_pretrained(save_dir)
 
-        # Save last checkpoint (includes AMP scaler & progress for perfect resume)
         # Save last checkpoint
-        policy.save_pretrained(output_directory)
+        if is_pi05:
+            policy.save_pretrained(str(output_directory))  # PEFT save
+        else:
+            policy.save_pretrained(output_directory)
 
         # Save training state including optimizer, scheduler, scaler, and step/epoch info
         checkpoint = {

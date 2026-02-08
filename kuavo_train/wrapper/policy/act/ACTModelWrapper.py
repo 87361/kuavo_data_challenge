@@ -64,7 +64,23 @@ class CustomACTModelWrapper(ACT):
         # BERT style VAE encoder with input tokens [cls, robot_state, *action_sequence].
         # The cls token forms parameters of the latent's distribution (like this [*means, *log_variances]).
         super().__init__(config)
-        
+
+        # Buffer to expose encoder output for the world model (set during forward)
+        self._last_encoder_out = None
+
+        # ===== World Model: Dynamics Head =====
+        if getattr(config, 'use_world_model', False):
+            from kuavo_train.wrapper.policy.act.WorldModelHead import DynamicsHead
+            _state_dim = (config.robot_state_feature.shape[0]
+                          if config.robot_state_feature else 16)
+            _action_dim = config.action_feature.shape[0]
+            self.dynamics_head = DynamicsHead(
+                z_dim=config.dim_model,                          # 512
+                action_dim=_action_dim,                          # 16
+                state_dim=_state_dim,                            # 16
+                hidden_dim=getattr(config, 'wm_dynamics_hidden_dim', 256),
+            )
+        # ======================================
 
         if self.config.use_depth and self.config.depth_features:
             depth_backbone_model = getattr(torchvision.models, config.depth_backbone)(
@@ -281,6 +297,11 @@ class CustomACTModelWrapper(ACT):
 
         # Forward pass through the transformer modules.
         encoder_out = self.encoder(encoder_in_tokens, pos_embed=encoder_in_pos_embed)
+
+        # ===== World Model: store encoder output for dynamics head =====
+        self._last_encoder_out = encoder_out  # (S, B, D=512)
+        # ==============================================================
+
         # TODO(rcadene, alexander-soare): remove call to `device` ; precompute and use buffer
         decoder_in = torch.zeros(
             (self.config.chunk_size, batch_size, self.config.dim_model),

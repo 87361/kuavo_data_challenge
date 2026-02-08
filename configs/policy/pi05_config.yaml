@@ -1,0 +1,110 @@
+hydra: # Hydra config directory, for parameter checking only
+  run:
+    dir: ./outputs/train_hydra_save/singlerun/${now:%Y%m%d_%H%M%S}  # Single run root dir
+  sweep:
+    dir: ./outputs/train_hydra_save/multirun/${now:%Y%m%d_%H%M%S}  # sweep root dir
+    subdir: ${hydra:job.override_dirname}
+
+
+task: "your_task_name"
+method: "your_method_name"
+timestamp: ${now:%Y%m%d_%H%M%S}
+repoid: "lerobot/${task}"
+root: "/your/path/to/your/lerobotdata/lerobot"
+
+# Training Configurations
+training:
+    output_directory: "outputs/train/${task}/${method}"
+    seed: 2025
+    max_epoch: 10
+
+    save_freq_epoch: 1  # Save every epoch
+    log_freq: 1
+    device: "cuda"
+    accumulation_steps: 1
+    ema_power: 0.75
+
+    batch_size: 4  # PI0.5 needs more memory, use smaller batch size
+    num_workers: 4  # Reduced for PI0.5
+    drop_last: False
+
+    max_training_step: null
+
+    # resume training
+    resume: false
+    resume_timestamp: null
+
+    scheduler_name: cosine
+    scheduler_warmup_steps: 500
+
+    # Early stopping config
+    early_stopping_patience: 3
+    val_split_ratio: 0.1
+
+    # Data augmentation - lighter for PI0.5 since it has its own image preprocessing
+    RGB_Augmenter:
+      enable: False
+      max_num_transforms: 1
+      random_order: True
+      tfs:
+        notransform:
+          weight: 1.0
+          type: "Identity"
+          kwargs: {}
+
+policy_name: pi05
+
+# Policy-related Configs
+policy:
+    _target_: kuavo_train.wrapper.policy.pi05.PI05ConfigWrapper.CustomPI05ConfigWrapper
+    paligemma_variant: gemma_2b
+    action_expert_variant: gemma_300m
+    dtype: "float32"
+
+    n_obs_steps: 1
+    chunk_size: 50
+    n_action_steps: 50
+
+    max_state_dim: 32
+    max_action_dim: 32
+
+    num_inference_steps: 10
+    image_resolution: [224, 224]
+
+    empty_cameras: 0
+    tokenizer_max_length: 200
+
+    normalization_mapping:
+      VISUAL:
+        _target_: lerobot.configs.types.NormalizationMode
+        value: IDENTITY
+      STATE:
+        _target_: lerobot.configs.types.NormalizationMode
+        value: QUANTILES
+      ACTION:
+        _target_: lerobot.configs.types.NormalizationMode
+        value: QUANTILES
+
+    use_amp: False
+    gradient_checkpointing: True  # Save memory
+
+    # Optimizer settings
+    optimizer_lr: 2.5e-5
+    optimizer_weight_decay: 0.01
+    optimizer_grad_clip_norm: 1.0
+
+    # Scheduler settings
+    scheduler_warmup_steps: 1000
+    scheduler_decay_steps: 30000
+    scheduler_decay_lr: 2.5e-6
+
+    # PI0.5 specific configs
+    task_description: "Pick up the parcel and place it on the scale."
+    pretrained_model_name: "lerobot/pi05_base"
+
+    # LoRA configs
+    lora_r: 16
+    lora_alpha: 32
+    lora_dropout: 0.05
+
+    custom: {}

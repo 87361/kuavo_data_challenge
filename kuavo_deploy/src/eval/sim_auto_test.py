@@ -130,7 +130,7 @@ def setup_policy(pretrained_path, policy_type, device=torch.device("cuda")):
     
     Args:
         pretrained_path: Path to the checkpoint
-        policy_type: Type of policy ('diffusion' or 'act')
+        policy_type: Type of policy ('diffusion', 'act', or 'pi05')
         
     Returns:
         Loaded policy model and device
@@ -144,6 +144,40 @@ def setup_policy(pretrained_path, policy_type, device=torch.device("cuda")):
         policy = CustomDiffusionPolicyWrapper.from_pretrained(Path(pretrained_path),strict=True)
     elif policy_type == 'act':
         policy = CustomACTPolicyWrapper.from_pretrained(Path(pretrained_path),strict=True)
+    elif policy_type == 'pi05':
+        # PI0.5 with LoRA: load base model + LoRA adapters
+        from lerobot.policies.pi05.modeling_pi05 import PI05Policy
+        from peft import PeftModel
+        import os
+        
+        pretrained_path = Path(pretrained_path)
+        adapter_config_path = pretrained_path / "adapter_config.json"
+        
+        if adapter_config_path.exists():
+            # LoRA checkpoint: load base model first, then apply LoRA adapters
+            log_model.info("PI0.5: Loading LoRA checkpoint...")
+            
+            # Load base model
+            base_model_name = "lerobot/pi05_base"
+            log_model.info(f"  Loading base model: {base_model_name}")
+            policy = PI05Policy.from_pretrained(base_model_name, strict=False)
+            
+            # Load LoRA adapters
+            log_model.info(f"  Loading LoRA adapters from: {pretrained_path}")
+            policy = PeftModel.from_pretrained(policy, str(pretrained_path))
+            
+            # Merge LoRA weights for faster inference (optional but recommended)
+            log_model.info("  Merging LoRA weights for faster inference...")
+            policy = policy.merge_and_unload()
+        else:
+            # Full checkpoint (non-LoRA)
+            log_model.info("PI0.5: Loading full checkpoint...")
+            policy = PI05Policy.from_pretrained(pretrained_path, strict=False)
+        
+        # Convert to bfloat16 for memory efficiency
+        if torch.cuda.is_bf16_supported():
+            log_model.info("PI0.5: Converting to bfloat16")
+            policy = policy.to(dtype=torch.bfloat16)
     elif policy_type == 'client':
         policy = PolicyClient()
     else:

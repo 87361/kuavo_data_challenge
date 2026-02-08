@@ -23,6 +23,16 @@ T = TypeVar("T", bound="CustomACTConfigWrapper")
 class CustomACTConfigWrapper(ACTConfig):
     custom: Dict[str, Any] = field(default_factory=dict)
 
+    # ===== World Model Config =====
+    use_world_model: bool = False
+    wm_lambda_dyn: float = 0.1        # dynamics loss weight
+    wm_lambda_cf: float = 0.01        # counterfactual consistency loss weight
+    wm_n_z_blocks: int = 4            # number of z sub-blocks (4 × 128 = 512)
+    wm_dynamics_hidden_dim: int = 256  # dynamics head MLP hidden dim
+    wm_swap_block_idx: int = 3        # which sub-block to swap for CF (3 = scene)
+    wm_warmup_steps: int = 1000       # steps before WM loss reaches full weight
+    # ==============================
+
     def __post_init__(self):
         super().__post_init__()
         default_map = {

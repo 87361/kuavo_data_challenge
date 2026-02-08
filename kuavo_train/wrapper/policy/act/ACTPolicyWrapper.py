@@ -45,7 +45,13 @@ class CustomACTPolicyWrapper(ACTPolicy):
         return actions
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict]:
-        """Run the batch through the model and compute the loss for training or validation."""
+        """Run the batch through the model and compute the loss for training or validation.
+
+        When use_world_model is enabled and we are training, this also computes:
+          - L_dyn:  dynamics loss  (predict next proprioceptive state from z_t, a_t)
+          - L_cf:   counterfactual consistency loss (swap z sub-block, enforce invariance)
+        Total: L = L_IL + λ_dyn * L_dyn + λ_cf * L_cf
+        """
         if self.config.image_features:
             batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
             batch[OBS_IMAGES] = [batch[key] for key in self.config.image_features]
@@ -56,6 +62,7 @@ class CustomACTPolicyWrapper(ACTPolicy):
 
         actions_hat, (mu_hat, log_sigma_x2_hat) = self.model(batch)
 
+        # ===== Original IL Loss (completely unchanged) =====
         l1_loss = (
             F.l1_loss(batch[ACTION], actions_hat, reduction="none") * ~batch["action_is_pad"].unsqueeze(-1)
         ).mean()
@@ -73,6 +80,44 @@ class CustomACTPolicyWrapper(ACTPolicy):
             loss = l1_loss + mean_kld * self.config.kl_weight
         else:
             loss = l1_loss
+
+        # ===== World Model Losses (only during training, fully gated by config) =====
+        if getattr(self.config, 'use_world_model', False) and self.training:
+            encoder_out = self.model._last_encoder_out  # (S, B, 512)
+            # z_t = latent token position after self-attention.
+            # DETACH: world model gradients do NOT flow back through the encoder.
+            z_t = encoder_out[0].detach()               # (B, 512)
+            a_t = batch[ACTION][:, 0, :]                # (B, 16)  first action step
+
+            # --- Dynamics loss: predict next proprioceptive state ---
+            l_dyn = torch.tensor(0.0, device=z_t.device)
+            if 'next_observation.state' in batch:
+                s_next_target = batch['next_observation.state']              # (B, 16)
+                s_next_pred = self.model.dynamics_head(z_t, a_t)             # (B, 16)
+                l_dyn = F.mse_loss(s_next_pred, s_next_target)
+
+            # --- Counterfactual consistency loss ---
+            from kuavo_train.wrapper.policy.act.WorldModelHead import compute_counterfactual_loss
+            l_cf = compute_counterfactual_loss(
+                dynamics_head=self.model.dynamics_head,
+                z_t=z_t,
+                a_t=a_t,
+                n_z_blocks=getattr(self.config, 'wm_n_z_blocks', 4),
+                swap_block_idx=getattr(self.config, 'wm_swap_block_idx', 3),
+                cf_mask=None,  # None → all state dims must be invariant to scene swap
+            )
+
+            # --- Warmup scheduling (coefficient set by training loop) ---
+            warmup_coeff = getattr(self, '_wm_warmup_coeff', 1.0)
+            lambda_dyn = self.config.wm_lambda_dyn * warmup_coeff
+            lambda_cf  = self.config.wm_lambda_cf  * warmup_coeff
+
+            loss_dict['dyn_loss'] = l_dyn.item()
+            loss_dict['cf_loss'] = l_cf.item()
+            loss_dict['wm_warmup'] = warmup_coeff
+
+            loss = loss + lambda_dyn * l_dyn + lambda_cf * l_cf
+        # ===== End World Model =====
 
         return loss, loss_dict
 
