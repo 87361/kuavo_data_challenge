@@ -95,7 +95,7 @@ inference:
   task: "task1"
   task_description: "Pick and Place"  # Task description for PI05 model (language prompt)
   method: "pi05"
-  timestamp: "run_20260203_194626"
+  timestamp: "run_20260203_221050"  # FIXED: 原来是run_20260203_194626，该目录不存在
   epoch: best  # Which epoch to use from the training weights. I.e. 50, 100, best, etc. Note:Weights will be used from outputs/train/<task>/<method>/<timestamp>/epoch<epoch> to load policy
   max_episode_steps: 200  # Max episode steps. Stops after this threshold. Increase for longer tasks.
   

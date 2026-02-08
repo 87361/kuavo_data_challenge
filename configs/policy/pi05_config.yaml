@@ -169,12 +169,36 @@ policy:
     
     # 自定义配置 / Custom Configurations
     custom:
-      # LoRA 微调配置 / LoRA Fine-tuning Configuration
+      # LoRA 微调配置 / LoRA Fine-tuning Configuration (Updated to match VLASH)
       use_lora: true  # 是否启用LoRA微调 / Whether to enable LoRA fine-tuning
       lora_rank: 16  # LoRA秩，越大参数越多 / LoRA rank, larger means more parameters
-      lora_alpha: 32.0  # LoRA缩放因子，通常为rank的2倍 / LoRA scaling factor, usually 2x rank
-      lora_dropout: 0.05  # LoRA dropout
-      lora_target_modules: ["q_proj", "v_proj", "k_proj", "o_proj"]  # LoRA目标模块 / LoRA target modules
+      lora_alpha: 16  # LoRA缩放因子，改为与VLASH一致 / LoRA scaling factor, changed to match VLASH
+      lora_dropout: 0.0  # LoRA dropout，改为0与VLASH一致 / Changed to 0 to match VLASH
+      
+      # LoRA目标模块（扩展版，包含注意力层和MLP层）/ LoRA target modules (expanded, includes attention and MLP)
+      lora_target_modules:
+        - q_proj
+        - k_proj
+        - v_proj
+        - o_proj
+        - gate_proj    # MLP层 / MLP layer
+        - up_proj      # MLP层 / MLP layer
+        - down_proj    # MLP层 / MLP layer
+        - out_proj     # 投影层 / Projection layer
+        - fc1          # 全连接层 / Fully connected layer
+        - fc2          # 全连接层 / Fully connected layer
+      
+      # PI05关键层（完全可训练，不使用LoRA）/ PI05 critical layers (fully trainable, not LoRA)
+      # 这些层对动作生成至关重要，必须完全可训练 / These layers are critical for action generation
+      lora_modules_to_save:
+        - action_in_proj      # 动作输入投影 / Action input projection
+        - action_out_proj     # 动作输出投影 / Action output projection
+        - time_mlp_in         # 时间MLP输入 / Time MLP input
+        - time_mlp_out        # 时间MLP输出 / Time MLP output
+        - state_proj          # 状态投影 / State projection
+        - state_mlp_in        # 状态MLP输入 / State MLP input
+        - state_mlp_out       # 状态MLP输出 / State MLP output
+      
       freeze_vision_tower: true  # 冻结视觉编码器(SigLIP) / Freeze vision encoder (SigLIP)
       
       # 深度图像支持 / Depth Image Support

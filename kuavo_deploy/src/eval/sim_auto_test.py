@@ -57,6 +57,7 @@ from kuavo_deploy.config import KuavoConfig
 from kuavo_deploy.utils.logging_utils import setup_logger
 from kuavo_deploy.kuavo_service.client import PolicyClient
 from lerobot.policies.factory import make_pre_post_processors
+from lerobot.processor.normalize_processor import hotswap_stats
 log_model = setup_logger("model")
 log_robot = setup_logger("robot")
 
@@ -266,10 +267,41 @@ def run_single_episode(config, policy, preprocessor, postprocessor, episode, out
         # Use wrapped preprocessor for consistent calling interface
         processed_obs = wrapped_preprocessor(observation)
         with torch.inference_mode():
-            action = policy.select_action(processed_obs)
-        log_model.info(f"Step {step}: predict action {action}")
-        action = postprocessor(action)
-        # print(f"action: {action}, action.shape: {action.shape}, action min: {action.min()}, action max: {action.max()}")
+            raw_action = policy.select_action(processed_obs)
+        
+        # ========== DEBUG: 验证unnormalize前后的action范围 ==========
+        if step == 0:  # 只在第一步打印详细信息
+            if hasattr(raw_action, 'action'):
+                raw_tensor = raw_action.action
+            else:
+                raw_tensor = raw_action
+            log_model.info(f"DEBUG Step {step}: Raw action range: [{raw_tensor.min().item():.4f}, {raw_tensor.max().item():.4f}]")
+            log_model.info(f"DEBUG Step {step}: Raw action values: {raw_tensor.squeeze().tolist()}")
+        # ========== END DEBUG ==========
+        
+        log_model.info(f"Step {step}: predict action {raw_action}")
+        action = postprocessor(raw_action)
+        
+        # ========== DEBUG: 验证unnormalize后的action范围 ==========
+        if step == 0:  # 只在第一步打印详细信息
+            if hasattr(action, 'action'):
+                unnorm_tensor = action.action
+            else:
+                unnorm_tensor = action
+            log_model.info(f"DEBUG Step {step}: Unnormalized action range: [{unnorm_tensor.min().item():.4f}, {unnorm_tensor.max().item():.4f}]")
+            log_model.info(f"DEBUG Step {step}: Unnormalized action values: {unnorm_tensor.squeeze().tolist()}")
+            # 检查是否有变化
+            if hasattr(raw_action, 'action'):
+                raw_tensor = raw_action.action
+            else:
+                raw_tensor = raw_action
+            diff = (unnorm_tensor - raw_tensor).abs().max().item()
+            if diff < 0.001:
+                log_model.warning(f"DEBUG WARNING: Action almost unchanged after postprocessor! diff={diff:.6f}")
+                log_model.warning("This suggests unnormalization is NOT working!")
+            else:
+                log_model.info(f"DEBUG: Action changed by max {diff:.4f} after unnormalization - OK")
+        # ========== END DEBUG ==========
         action_infer_time = time.time()
         log_model.info(f"episode {episode}, step {step}, action infer time: {action_infer_time - start_time:.3f}s")
         average_action_infer_time += action_infer_time - start_time
@@ -369,6 +401,52 @@ def kuavo_eval_autotest(config: KuavoConfig):
     device = torch.device(cfg.device)
     policy = setup_policy(pretrained_path, policy_type, device)
     preprocessor, postprocessor = make_pre_post_processors(None, Path(str(pretrained_path).split("/epoch", 1)[0]))
+    
+    # ========== DEBUG: 验证postprocessor的stats加载情况 ==========
+    log_model.info("=" * 60)
+    log_model.info("DEBUG: Checking postprocessor stats loading...")
+    for i, step in enumerate(postprocessor._steps):
+        log_model.info(f"  Step {i}: {step.__class__.__name__}")
+        if hasattr(step, '_tensor_stats'):
+            stats_keys = list(step._tensor_stats.keys())
+            log_model.info(f"    Stats keys: {stats_keys}")
+            if 'action' in step._tensor_stats:
+                action_stats = step._tensor_stats['action']
+                log_model.info(f"    Action stats keys: {list(action_stats.keys())}")
+                if 'q01' in action_stats and 'q99' in action_stats:
+                    log_model.info(f"    Action q01: {action_stats['q01']}")
+                    log_model.info(f"    Action q99: {action_stats['q99']}")
+                else:
+                    log_model.warning("    WARNING: action stats missing q01/q99!")
+            else:
+                log_model.warning("    WARNING: 'action' key NOT in stats! Unnormalization will be skipped!")
+        else:
+            log_model.info("    (No _tensor_stats attribute)")
+    log_model.info("=" * 60)
+    # ========== END DEBUG ==========
+    
+    # ========== HOTSWAP STATS: 从数据集强制加载stats（可选修复方案）==========
+    # 如果发现上面的调试日志显示stats未正确加载，可以取消下面的注释来强制加载
+    # 需要修改 dataset_root 为你的数据集路径
+    ENABLE_HOTSWAP_STATS = False  # 设置为True以启用强制stats加载
+    if ENABLE_HOTSWAP_STATS:
+        import json
+        dataset_root = Path("/home/yly/ICRA-kuavo/kuavo_data_challenge/kuavo_data/task1_trans/lerobot")
+        stats_path = dataset_root / "meta" / "stats.json"
+        if stats_path.exists():
+            log_model.info(f"Loading stats from dataset: {stats_path}")
+            with open(stats_path, 'r') as f:
+                dataset_stats = json.load(f)
+            # 转换为tensor格式
+            for key in dataset_stats:
+                for stat_name in dataset_stats[key]:
+                    if isinstance(dataset_stats[key][stat_name], list):
+                        dataset_stats[key][stat_name] = torch.tensor(dataset_stats[key][stat_name])
+            postprocessor = hotswap_stats(postprocessor, dataset_stats)
+            log_model.info("Stats hotswapped successfully!")
+        else:
+            log_model.warning(f"Stats file not found: {stats_path}")
+    # ========== END HOTSWAP STATS ==========
     
     # first reset
     reset_service = rospy.ServiceProxy('/simulator/reset', Trigger)

@@ -59,17 +59,29 @@ class CustomPI05ConfigWrapper(PI05Config):
                         "Remove it from 'custom' and modify in the parent configuration instead."
                     )
         
-        # Set default LoRA parameters if not specified
+        # Set default LoRA parameters if not specified (Updated to match VLASH)
         if not hasattr(self, 'use_lora'):
             self.use_lora = False
         if not hasattr(self, 'lora_rank'):
             self.lora_rank = 16
         if not hasattr(self, 'lora_alpha'):
-            self.lora_alpha = 32.0
+            self.lora_alpha = 16  # Changed to 16 to match VLASH
         if not hasattr(self, 'lora_dropout'):
-            self.lora_dropout = 0.05
+            self.lora_dropout = 0.0  # Changed to 0 to match VLASH
         if not hasattr(self, 'lora_target_modules'):
-            self.lora_target_modules = ["q_proj", "v_proj", "k_proj", "o_proj"]
+            # Expanded to include MLP layers (matching VLASH)
+            self.lora_target_modules = [
+                "q_proj", "k_proj", "v_proj", "o_proj",  # Attention layers
+                "gate_proj", "up_proj", "down_proj",      # MLP layers
+                "out_proj", "fc1", "fc2",                 # Other linear layers
+            ]
+        if not hasattr(self, 'lora_modules_to_save'):
+            # PI05-specific layers that should be fully trainable (critical for action generation)
+            self.lora_modules_to_save = [
+                "action_in_proj", "action_out_proj",      # Action projection layers
+                "time_mlp_in", "time_mlp_out",            # Time MLP layers
+                "state_proj", "state_mlp_in", "state_mlp_out",  # State projection layers
+            ]
         if not hasattr(self, 'freeze_vision_tower'):
             self.freeze_vision_tower = True
         if not hasattr(self, 'use_depth'):

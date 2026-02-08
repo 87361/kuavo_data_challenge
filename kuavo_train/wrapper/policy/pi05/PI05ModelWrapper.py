@@ -58,14 +58,23 @@ class CustomPI05ModelWrapper(PI05Pytorch):
     def _apply_lora(self, config):
         """Apply LoRA to the PaliGemma language model and Gemma Expert.
         
-        LoRA is applied to the attention layers (q_proj, v_proj, k_proj, o_proj by default).
-        This significantly reduces the number of trainable parameters while maintaining
-        good fine-tuning performance.
+        LoRA is applied to attention and MLP layers. Additionally, PI05-specific layers
+        (action_proj, time_mlp, state_proj) are set as fully trainable via modules_to_save.
+        This follows the VLASH implementation for proper PI05 fine-tuning.
         """
+        from peft import TaskType
+        
         lora_rank = getattr(config, 'lora_rank', 16)
-        lora_alpha = getattr(config, 'lora_alpha', 32.0)
-        lora_dropout = getattr(config, 'lora_dropout', 0.05)
-        target_modules = getattr(config, 'lora_target_modules', ["q_proj", "v_proj", "k_proj", "o_proj"])
+        lora_alpha = getattr(config, 'lora_alpha', 16)  # Changed to 16 to match VLASH
+        lora_dropout = getattr(config, 'lora_dropout', 0.0)  # Changed to 0 to match VLASH
+        
+        # Expanded target_modules to include MLP layers (matching VLASH)
+        default_target_modules = [
+            "q_proj", "k_proj", "v_proj", "o_proj",  # Attention layers
+            "gate_proj", "up_proj", "down_proj",      # MLP layers
+            "out_proj", "fc1", "fc2",                 # Other linear layers
+        ]
+        target_modules = getattr(config, 'lora_target_modules', default_target_modules)
         
         # Ensure target_modules is a plain Python list (convert from ListConfig if needed)
         if isinstance(target_modules, str):
@@ -74,14 +83,35 @@ class CustomPI05ModelWrapper(PI05Pytorch):
             # Convert ListConfig or other iterables to plain list for JSON serialization
             target_modules = list(target_modules)
         
+        # PI05-specific layers that should be fully trainable (not just LoRA)
+        # These are critical for action generation and must not be frozen
+        default_modules_to_save = [
+            "action_in_proj", "action_out_proj",      # Action projection layers
+            "time_mlp_in", "time_mlp_out",            # Time MLP layers
+            "state_proj", "state_mlp_in", "state_mlp_out",  # State projection layers
+        ]
+        modules_to_save = getattr(config, 'lora_modules_to_save', default_modules_to_save)
+        
+        # Ensure modules_to_save is a plain Python list
+        if modules_to_save:
+            if isinstance(modules_to_save, str):
+                modules_to_save = [modules_to_save]
+            else:
+                modules_to_save = list(modules_to_save)
+        
         lora_config = LoraConfig(
             r=lora_rank,
             lora_alpha=lora_alpha,
             target_modules=target_modules,
             lora_dropout=lora_dropout,
             bias="none",
-            task_type="CAUSAL_LM",
+            task_type=TaskType.FEATURE_EXTRACTION,  # Changed from CAUSAL_LM to match VLASH
+            modules_to_save=modules_to_save if modules_to_save else None,  # Added for PI05 layers
         )
+        
+        logging.info(f"LoRA config: rank={lora_rank}, alpha={lora_alpha}, dropout={lora_dropout}")
+        logging.info(f"LoRA target_modules: {target_modules}")
+        logging.info(f"LoRA modules_to_save (fully trainable): {modules_to_save}")
         
         # Apply LoRA to PaliGemma language model
         try:
@@ -174,19 +204,61 @@ class CustomPI05ModelWrapper(PI05Pytorch):
             self.depth_proj = None
     
     def _print_trainable_params(self):
-        """Print the number of trainable parameters."""
+        """Print detailed information about trainable parameters.
+        
+        This helps verify that:
+        1. LoRA adapters are trainable
+        2. PI05-specific layers (action_proj, time_mlp, state_proj) are trainable
+        3. Base model parameters are frozen
+        """
         trainable_params = 0
         all_params = 0
-        for _, param in self.named_parameters():
-            all_params += param.numel()
+        
+        # Track trainable modules by category
+        lora_params = 0
+        action_params = 0
+        time_params = 0
+        state_params = 0
+        other_trainable = 0
+        
+        for name, param in self.named_parameters():
+            num_params = param.numel()
+            all_params += num_params
+            
             if param.requires_grad:
-                trainable_params += param.numel()
+                trainable_params += num_params
+                
+                # Categorize trainable parameters
+                if 'lora' in name.lower():
+                    lora_params += num_params
+                elif 'action' in name.lower():
+                    action_params += num_params
+                elif 'time' in name.lower():
+                    time_params += num_params
+                elif 'state' in name.lower():
+                    state_params += num_params
+                else:
+                    other_trainable += num_params
         
         trainable_percent = 100 * trainable_params / all_params if all_params > 0 else 0
-        logging.info(
-            f"Trainable params: {trainable_params:,} / {all_params:,} "
-            f"({trainable_percent:.2f}%)"
-        )
+        
+        logging.info("=" * 60)
+        logging.info("Trainable Parameters Summary:")
+        logging.info(f"  Total: {trainable_params:,} / {all_params:,} ({trainable_percent:.2f}%)")
+        logging.info(f"  LoRA adapters: {lora_params:,}")
+        logging.info(f"  Action layers: {action_params:,}")
+        logging.info(f"  Time layers: {time_params:,}")
+        logging.info(f"  State layers: {state_params:,}")
+        logging.info(f"  Other trainable: {other_trainable:,}")
+        logging.info("=" * 60)
+        
+        # Warn if critical layers seem to be missing
+        if action_params == 0:
+            logging.warning("WARNING: No action-related parameters are trainable!")
+        if time_params == 0:
+            logging.warning("WARNING: No time-related parameters are trainable!")
+        if state_params == 0:
+            logging.warning("WARNING: No state-related parameters are trainable!")
     
     def get_trainable_parameters(self):
         """Return only trainable parameters for optimizer."""
