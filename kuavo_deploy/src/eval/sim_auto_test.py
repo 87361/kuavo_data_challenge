@@ -153,11 +153,22 @@ def setup_policy(pretrained_path, policy_type, device=torch.device("cuda")):
         pretrained_path = Path(pretrained_path)
         adapter_config_path = pretrained_path / "adapter_config.json"
         
+        # Check for local pretrained models first (for offline deployment)
+        script_dir = Path(__file__).resolve().parent
+        project_root = script_dir.parents[3]  # kuavo_data_challenge/
+        local_hf_cache = project_root / "pretrained_models" / "huggingface_cache"
+        
+        # Set HF_HOME to local cache if exists
+        if local_hf_cache.exists():
+            os.environ["HF_HOME"] = str(local_hf_cache)
+            os.environ["TRANSFORMERS_OFFLINE"] = "1"
+            log_model.info(f"PI0.5: Using local HuggingFace cache: {local_hf_cache}")
+        
         if adapter_config_path.exists():
             # LoRA checkpoint: load base model first, then apply LoRA adapters
             log_model.info("PI0.5: Loading LoRA checkpoint...")
             
-            # Load base model
+            # Load base model (uses HF_HOME automatically)
             base_model_name = "lerobot/pi05_base"
             log_model.info(f"  Loading base model: {base_model_name}")
             policy = PI05Policy.from_pretrained(base_model_name, strict=False)
