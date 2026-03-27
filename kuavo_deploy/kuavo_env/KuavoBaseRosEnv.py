@@ -313,6 +313,9 @@ class KuavoBaseRosEnv(gym.Env):
     
     def check_action(self, action, mode='default'):
         if mode == 'default':  # 比较 action_space
+            expected_dim = len(self.action_space.low)
+            if len(action) != expected_dim:
+                action = self._coerce_action_dim(action, expected_dim)
             if len(action) != len(self.action_space.low):
                 raise ValueError(f"action shape must be {len(self.action_space.low)}")
             if np.any(action < self.action_space.low) or np.any(action > self.action_space.high):
@@ -324,6 +327,34 @@ class KuavoBaseRosEnv(gym.Env):
             return action
 
         raise ValueError(f"Unsupported mode: {mode}")
+
+    def _coerce_action_dim(self, action, expected_dim):
+        action = np.asarray(action, dtype=np.float32).reshape(-1)
+        current_gripper = np.asarray(self.arm_state.get("gripper", [0.0, 0.0]), dtype=np.float32).reshape(-1)
+        if current_gripper.size < 2:
+            current_gripper = np.pad(current_gripper, (0, 2 - current_gripper.size), constant_values=0.0)
+
+        if self.control_mode == "joint" and expected_dim == 16 and action.size == 14:
+            coerced = np.concatenate((action[:7], current_gripper[:1], action[7:14], current_gripper[1:2]), axis=0)
+            log_robot.warning(
+                f"Coerced 14-dim joint action to 16-dim by inserting current gripper states: {current_gripper.tolist()}"
+            )
+            return coerced
+
+        if self.control_mode == "joint" and expected_dim == 8 and action.size == 14:
+            if self.which_arm == "left":
+                coerced = np.concatenate((action[:7], current_gripper[:1]), axis=0)
+            elif self.which_arm == "right":
+                coerced = np.concatenate((action[7:14], current_gripper[1:2]), axis=0)
+            else:
+                coerced = action
+            if coerced.size == expected_dim:
+                log_robot.warning(
+                    f"Coerced 14-dim joint action to {expected_dim}-dim for {self.which_arm} arm by selecting arm joints and current gripper state."
+                )
+                return coerced
+
+        return action
 
 
 

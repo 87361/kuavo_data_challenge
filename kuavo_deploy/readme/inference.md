@@ -296,6 +296,17 @@ env_name: Kuavo-Real
 
 ## 🐛 故障排除
 
+## LingBot 部署补充
+
+当 `configs/deploy/kuavo_env.yaml` 中设置 `inference.policy_type=lingbot` 时：
+
+- 可用 `inference.pretrained_path` 直接指定 LingBot 导出的 `hf_ckpt` 路径
+- 可用 `inference.task_prompt` 传递文本任务描述
+- 可用 `inference.lingbot_norm_stats_file` 指定自定义归一化统计文件
+- 适配代码入口在 `kuavo_deploy/utils/lingbot_adapter.py`
+
+真实机器人部署示例说明见仓库根目录 `README_LINGBOT_REAL_TEST.md`。
+
 ### 常见问题
 
 | 问题 | 解决方案 |

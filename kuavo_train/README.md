@@ -84,7 +84,7 @@ python kuavo_train/train_policy.py \
 * `method`：自定义，方法名，用于区分不同的训练，如`diffusion_bs128_usedepth_nofuse`等
 * `root`：训练数据的本地路径，注意加上lerobot，与1中的数转保存路径需要对应，为：`/path/to/lerobot_data/lerobot`
 * `training.batch_size`：批大小，可根据 GPU 显存调整
-* `policy_name`：使用的策略，用于策略实例化的，目前支持`diffusion`和`act`
+* `policy_name`：使用的策略，用于策略实例化，目前支持`diffusion`、`act`、`lingbot`
 * 其他参数可详见yaml文件说明，推荐直接修改yaml文件，避免命令行输入错误
 
 ---
@@ -107,3 +107,25 @@ accelerate launch --config_file ./configs/policy/accelerate_config.yaml \
 ---
 
 > 本目录主要面向机器人模仿学习策略学习研究，可作为快速构建 diffusion-based policy 的模板。
+
+---
+
+### LingBot-VLA 训练集成
+
+仓库已集成 `policy_name=lingbot` 分流逻辑，可直接从 `kuavo_train/train_policy.py` 启动 LingBot 的 `torchrun` 训练流程。
+
+示例：
+
+```bash
+python kuavo_train/train_policy.py \
+  --config-path=../configs/policy \
+  --config-name=lingbot_config.yaml \
+  policy.dry_run=true
+```
+
+相关文件：
+
+- `configs/policy/lingbot_config.yaml`
+- `configs/policy/lingbot/robotwin_load20000h.yaml`
+- `kuavo_train/train_lingbot.sh`
+- `kuavo_train/wrapper/policy/lingbot/`

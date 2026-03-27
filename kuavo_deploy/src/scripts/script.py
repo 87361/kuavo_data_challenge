@@ -130,11 +130,7 @@ class ArmMove:
 
         self.inference_config = config.inference
         self.bag_path = self.inference_config.go_bag_path
-
-        self.msg_dict_of_list = self._read_topic_messages(
-            bag_path = self.bag_path,
-            topic_names = ["/control_robot_hand_position","/leju_claw_command","/kuavo_arm_traj"]
-        )
+        self.msg_dict_of_list = {}
 
         rospy.init_node('kuavo_deploy', anonymous=True)
         self.env = gym.make(
@@ -181,6 +177,19 @@ class ArmMove:
         except Exception as e:
             rospy.logerr(f"Failed to read messages from bag: {e}")
             return {}
+
+    def _ensure_bag_loaded(self) -> None:
+        """按需加载 bag，仅在需要轨迹回放类任务时调用。"""
+        if self.msg_dict_of_list:
+            return
+        if not self.bag_path or not Path(self.bag_path).exists():
+            raise FileNotFoundError(f"Bag file not found: {self.bag_path}")
+        self.msg_dict_of_list = self._read_topic_messages(
+            bag_path=self.bag_path,
+            topic_names=["/control_robot_hand_position", "/leju_claw_command", "/kuavo_arm_traj"],
+        )
+        if "/kuavo_arm_traj" not in self.msg_dict_of_list or not self.msg_dict_of_list["/kuavo_arm_traj"]:
+            raise ValueError(f"No '/kuavo_arm_traj' messages found in bag: {self.bag_path}")
 
     def _pub_arm_traj(self, msg) -> None:
         """发布机械臂轨迹"""
@@ -370,6 +379,7 @@ class ArmMove:
     def go(self) -> None:
         """先插值到bag第一帧的位置，再回放bag包前往工作位置"""
         time.sleep(1)
+        self._ensure_bag_loaded()
         # 移动到轨迹起始位置
         start_angles = [float(j) for j in self.msg_dict_of_list.get("/kuavo_arm_traj", [])[0].position]
         start_angles = np.array(start_angles)/180*np.pi
@@ -380,6 +390,7 @@ class ArmMove:
     def here_run(self) -> None:
         """直接插值到bag最后一帧位置运行"""
         time.sleep(1)
+        self._ensure_bag_loaded()
         # 移动到轨迹结束位置
         end_angles = [float(j) for j in self.msg_dict_of_list.get("/kuavo_arm_traj", [])[-1].position]
         end_angles = np.array(end_angles)/180*np.pi
@@ -390,6 +401,7 @@ class ArmMove:
     def back_to_zero(self) -> None:
         """回到零位"""
         time.sleep(1)
+        self._ensure_bag_loaded()
         # 移动到轨迹结束位置
         end_angles = [float(j) for j in self.msg_dict_of_list.get("/kuavo_arm_traj", [])[-1].position]
         end_angles = np.array(end_angles)/180*np.pi
