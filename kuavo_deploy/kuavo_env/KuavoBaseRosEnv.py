@@ -23,28 +23,28 @@ log_robot = setup_logger("robot")
 
 
 class KuavoBaseRosEnv(gym.Env):
-    """Kuavo机器人ROS环境基类"""
+    """Kuavo robot ROS environment base class"""
 
     def __init__(self, config: KuavoConfig):
         self._set_config(config.env)
         
-        # 初始化ROS管理器
+        #Initialize ROS manager Initialize ROS manager
         self.ros_manager = ROSManager()
         self.control_signal_manager = ControlSignalManager()
         
-        # 初始化其他组件
+        #Initialize other components Initialize other components
         self.bridge = CvBridge()
         self._set_observation_space()
         self._set_action_space()
         self._init_kuavo_sdk()
         self._set_ros_topics()
         
-        # 等待ROS话题初始化
+        #Wait for ROS topics to initialize Wait for ROS topics to initialise
         log_robot.info(f"Inializing done!")
         print(f"Inializing done!")
 
     def _set_config(self, config_kuavo_env):
-        """设置配置参数"""
+        """Set configuration parameters Set configuration parameters"""
         self.ros_rate = config_kuavo_env.ros_rate
         self.control_mode = config_kuavo_env.control_mode
         self.obs_key_map = config_kuavo_env.obs_key_map
@@ -58,14 +58,14 @@ class KuavoBaseRosEnv(gym.Env):
         self.arm_init = np.array([0]*14)
 
 
-        # 从配置中获取limits部分
+        #Obtain limit values from the configuration
         self.limits = config_kuavo_env.limits
         self.obs_key_map = config_kuavo_env.obs_key_map
         self.obs_buffer = ObsBuffer(
             config=config_kuavo_env, 
             obs_key_map=self.obs_key_map,
         )
-        self.arm_state_keys = config_kuavo_env.arm_state_keys # observation.state 的key顺序
+        self.arm_state_keys = config_kuavo_env.arm_state_keys # observation.state key ordering
         self.ratio = config_kuavo_env.ratio
         self.frame_alignment = config_kuavo_env.frame_alignment
 
@@ -73,7 +73,7 @@ class KuavoBaseRosEnv(gym.Env):
         limits = self.limits
         obs_low, obs_high = [], []
 
-        # -------- 构建 state 空间（joint_q + gripper） --------
+        # -------- State space (joint_q + gripper) --------
         if 'joint_q' in self.obs_key_map:
             joint_min, joint_max = limits['joint_q']['min'], limits['joint_q']['max']
         else:
@@ -95,7 +95,7 @@ class KuavoBaseRosEnv(gym.Env):
         self.obs_low = np.array(obs_low)
         self.obs_high = np.array(obs_high)
 
-        # -------- 构建图像空间 --------
+        # -------- Image space --------
         obs_spaces = {}
         for key, obs_name in self.obs_key_map.items():
             if any(tag in key for tag in ['cam', 'depth']):
@@ -105,12 +105,12 @@ class KuavoBaseRosEnv(gym.Env):
                     obs_spaces[f"observation.{key}"] = gym.spaces.Box(
                         low=low, high=high, shape=(1, h, w), dtype=np.uint16
                     )
-                else:  # cam 类键
+                else:  # cam keys
                     obs_spaces[f"observation.images.{key}"] = gym.spaces.Box(
                         low=0, high=255, shape=(3, h, w), dtype=np.uint8
                     )
 
-        # -------- 添加 state 空间 --------
+        # -------- Adding state space --------
         obs_spaces["observation.state"] = gym.spaces.Box(
             low=self.obs_low,
             high=self.obs_high,
@@ -124,10 +124,10 @@ class KuavoBaseRosEnv(gym.Env):
         limits = self.limits
 
         # ===============================
-        # 辅助函数：构造单臂动作范围
+        #Aux function: Constructing single arm operating range Aux function: Constructing single arm operating range
         # ===============================
         def get_arm_action_range(arm: str):
-            """返回 (low, high)"""
+            """(low, high)"""
             if self.control_mode == 'joint':
                 if arm == 'left':
                     return (
@@ -168,12 +168,12 @@ class KuavoBaseRosEnv(gym.Env):
             raise ValueError(f"Unsupported arm mode: {arm}")
 
         # ===============================
-        # 获取臂部动作范围
+        #Get arm motion range
         # ===============================
         arm_low, arm_high = get_arm_action_range(self.which_arm)
 
         # ===============================
-        # 如果包含 base 控制，则拼接 base 范围
+        #If a base control is included, splice the base range
         # ===============================
         if not self.only_arm:
             base_low, base_high = limits['base']['min'], limits['base']['max']
@@ -181,7 +181,7 @@ class KuavoBaseRosEnv(gym.Env):
             arm_high += base_high
 
         # ===============================
-        # 创建 Gym Box 空间
+        #Create a Gym Box space
         # ===============================
         self.action_space = gym.spaces.Box(
             low=np.array(arm_low, dtype=np.float64),
@@ -190,7 +190,7 @@ class KuavoBaseRosEnv(gym.Env):
         )
 
     def _init_kuavo_sdk(self):
-        """初始化Kuavo SDK"""
+        """Initialise Kuavo SDK"""
         if not KuavoSDK().Init():
             log_robot.error("Init KuavoSDK failed, exit!")
             sys.exit(1)
@@ -198,7 +198,7 @@ class KuavoBaseRosEnv(gym.Env):
         self.robot_state = KuavoRobotState()
 
     def _set_ros_topics(self):
-        """设置ROS话题"""
+        """Setup ROS Topics Setup ROS Topics"""
         self.rate = rospy.Rate(self.ros_rate)
         
         if self.eef_type == 'rq2f85':
@@ -207,20 +207,20 @@ class KuavoBaseRosEnv(gym.Env):
             self.lejuclaw = LejuClaw()
         elif self.eef_type == 'qiangnao':
             self.qiangnao = DexterousHand()
-        # obs buffer 初始化            
+        #obs buffer initialization
         self.obs_buffer.wait_buffer_ready()
 
 
     def reset(self, **kwargs):
-        """重置机器人状态"""
+        """Reset Robot state Reset Robot state"""
         self._enter_external_control_mode()
         self._reset_head()
         self._reset_eef()
 
-        # === 平均当前观测和位姿 ===
+        #=== Average current observation and pose ===
         avg_data = self._compute_average_state(average_num=10)
 
-        # === 更新状态 ===
+        #=== Update status ===
         self.cur_state = avg_data["state"]
         self.cur_joint_angles_action = avg_data["joint_action"]
 
@@ -230,21 +230,21 @@ class KuavoBaseRosEnv(gym.Env):
         return obs, {}
 
     # ==========================================================
-    # 子函数 1. 外部控制模式设置
+    #Subfunction 1. External control mode setting
     # ==========================================================
     def _enter_external_control_mode(self):
         self.robot.set_external_control_arm_mode()
         print("set_external_control_arm_mode", self.robot_state.arm_control_mode())
 
     # ==========================================================
-    # 子函数 2. 头部复位
+    #Subfunction 2. Head reset
     # ==========================================================
     def _reset_head(self):
         if self.head_init is not None:
             self.robot.control_head(self.head_init[0], self.head_init[1])
 
     # ==========================================================
-    # 子函数 3. 末端执行器（夹爪）复位
+    #Subfunction 3. End effector (gripper) reset
     # ==========================================================
     def _reset_eef(self):
         if self.which_arm == 'both':
@@ -266,7 +266,7 @@ class KuavoBaseRosEnv(gym.Env):
             raise KeyError(f"Unsupported arm type: {self.which_arm}")
 
     # ==========================================================
-    # 子函数 4. 求平均状态与末端姿态
+    #Subfunction 4. Find the average state and terminal attitude
     # ==========================================================
     def _compute_average_state(self, average_num=10):
         state_sum, joint_sum = None, None
@@ -283,7 +283,7 @@ class KuavoBaseRosEnv(gym.Env):
                 joint_sum += fk_joint_angles
             time.sleep(0.001)
 
-        # 平均计算
+        #average calculation
         avg_state = state_sum / average_num
         avg_joint = joint_sum / average_num
 
@@ -293,7 +293,7 @@ class KuavoBaseRosEnv(gym.Env):
         }
 
     # ==========================================================
-    # 子函数 5. 构造完整 FK 输入
+    #Subfunction 5. Construct the complete FK input
     # ==========================================================
     def _get_init_joint_angles(self, joint_q):
         # if self.which_arm == 'both':
@@ -312,7 +312,7 @@ class KuavoBaseRosEnv(gym.Env):
             raise ValueError(f"Invalid which_arm: {self.which_arm}")
     
     def check_action(self, action, mode='default'):
-        if mode == 'default':  # 比较 action_space
+        if mode == 'default':  #compare action_space
             expected_dim = len(self.action_space.low)
             if len(action) != expected_dim:
                 action = self._coerce_action_dim(action, expected_dim)
@@ -367,33 +367,33 @@ class KuavoBaseRosEnv(gym.Env):
         log_robot.info(f"clip action: {action}, check time: {t1 - t0:.3f}s")
 
         if not self.only_arm:
-            # 获取action中base移动相关的部分（最后4个值），最后一位用于判断是移动还是手部动作
+            #Get the base movement-related part of the action (the last 4 values). The last bit is used to determine whether it is movement or hand action.
             base_action = action[-4:]
-            move_flag = base_action[-1]  # 0-1之间的值，用于判断是否执行base移动
-            if move_flag > 0.5:  # 如果大于0.5，执行base移动
-                # 执行base移动，这里需要调用相关的base移动接口
-                log_robot.info(f"➡️  执行【底盘移动】(mode_flag > 0.5)")
+            move_flag = base_action[-1]  #A value between 0-1, used to determine whether to perform base movement
+            if move_flag > 0.5:  #If greater than 0.5, perform base movement
+                #To perform base movement, you need to call the relevant base movement interface.
+                log_robot.info(f"➡️ Execute [Chassis Movement] (mode_flag > 0.5)")
                 log_robot.info(f"cmd_pos_world = [x:{base_action[0]:.4f}, y:{base_action[1]:.4f}, yaw:{base_action[2]:.4f}], move_flag={move_flag:.4f}")
                 self.robot.control_command_pose_world(base_action[0], base_action[1], 0, base_action[2])
                 self.rate.sleep()
                 self._record_sleep_time(t1)
                 return self.get_obs(), 0, False, False, {}
             else:
-                log_robot.info(f"机器人是否处于站立状态：{self.robot._kuavo_core.state},(mode_flag < 0.5)")
+                log_robot.info(f"Whether the robot is standing: {self.robot._kuavo_core.state}, (mode_flag < 0.5)")
                 if self.robot._kuavo_core.state != 'stance':
                     self.robot.stance()
                     self.robot_state.wait_for_stance()
-                    log_robot.info(f"➡️  执行【机器人站立】成功! (mode_flag < 0.5)")
-            # 如果不执行base移动，则执行手部动作，此时使用action的前面部分
+                    log_robot.info(f"➡️ Successfully executed [Robot Stand]! (mode_flag < 0.5)")
+            #If the base movement is not performed, the hand movement is performed, and the front part of the action is used at this time.
             action = action[:-4]
 
 
-        # === 4. 执行动作 ===
+        #=== 4. Execute action ===
         t2 = time.time()
         self.cur_joint_angles_action = np.concatenate((action[:7], action[8:15]), axis=0)
         self.exec_action(action)
 
-        # === 5. 延时与观测 ===
+        #=== 5. Delay and observation ===
         
         self.rate.sleep()
         self._record_sleep_time(t2)
@@ -402,7 +402,7 @@ class KuavoBaseRosEnv(gym.Env):
         t4 = time.time()
         log_robot.info(f"get obs time: {t4 - t3:.3f}s")
 
-        # === 6. 奖励与返回 ===
+        #=== 6. Rewards and Returns ===
         reward = self.compute_reward()
         return obs, reward, False, False, {}
     
@@ -413,7 +413,7 @@ class KuavoBaseRosEnv(gym.Env):
         log_robot.info(f"rate.sleep time: {self.sleep_time:.3f}s")
 
     def exec_action(self, action):
-        """执行机械臂与末端执行器动作"""
+        """Execute arm and end-effector motion Execute arm and end-effector motion"""
         # if not self.only_arm:
         #     return
 
@@ -421,10 +421,10 @@ class KuavoBaseRosEnv(gym.Env):
             try:
                 self.robot.control_arm_joint_positions(target_position)
             except RuntimeError as e:
-                # 当机器人处于 command_pose_world 状态（底盘移动）时，无法控制手臂
+                #Unable to control arms when robot is in command_pose_world state (chassis moving)
                 if "must be in stance state" in str(e):
-                    log_robot.warning(f"⚠️  无法发送手臂命令：机器人当前状态不允许 (可能正在底盘移动)")
-                    log_robot.debug(f"   详细错误: {e}")
+                    log_robot.warning(f"⚠️  Cannot send arm commands: Robot's current state does not allow such operation (possibly robot is not in stance state)")
+                    log_robot.debug(f"   Details: {e}")
                 else:
                     raise
 
@@ -453,7 +453,7 @@ class KuavoBaseRosEnv(gym.Env):
 
 
     def _control_eef(self, left_eef, right_eef):
-        """根据 eef_type 控制不同的末端执行器"""
+        """Choose end-effector based on eef_type"""
         if self.eef_type == 'rq2f85':
             eef_msg = JointState()
             try:
@@ -483,11 +483,11 @@ class KuavoBaseRosEnv(gym.Env):
             raise KeyError(f"Unsupported eef_type: {self.eef_type}")
 
     def compute_reward(self):
-        """计算奖励"""
+        """Compute reward Compute reward"""
         return 0
 
     def get_obs(self):
-        """获取观测图像及state等"""
+        """Obtain observation image and state Obtain observation image and state"""
         obs = {}
         self.arm_state = {}
 
@@ -531,7 +531,7 @@ class KuavoBaseRosEnv(gym.Env):
             else:
                 raise KeyError(f"Unsupported which_arm: {self.which_arm}")
 
-        # 拼接结果
+        #Splicing result
         obs["observation.state"] = np.concatenate(
             arm_data["left"] + arm_data["right"], axis=0
         )
@@ -541,7 +541,7 @@ class KuavoBaseRosEnv(gym.Env):
         return obs    
 
     def close(self):
-        """关闭环境，释放资源"""
+        """Close the environment and release resources Closing environment"""
         log_robot.info("Closing KuavoBaseRosEnv...")
         try:
             if hasattr(self, 'obs_buffer'):
@@ -566,21 +566,21 @@ class KuavoBaseRosEnv(gym.Env):
             traceback.print_exc()
 
     def __enter__(self):
-        """上下文管理器入口"""
+        """Context manager entry"""
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """上下文管理器出口"""
+        """Context manager exit"""
         self.close()
 
 class LejuClaw:
-    """乐聚爪手控制器"""
+    """leju claw controller leju claw controller"""
     def __init__(self, ros_manager=None):
         self.ros_manager = ros_manager or ROSManager()
         self._pub_leju_claw_cmd = self.ros_manager.register_publisher('/leju_claw_command', lejuClawCommand, queue_size=10)
 
     def control(self, target_positions: list, target_velocities: list = None, target_torques: list = None):
-        """控制双手"""
+        """Hand control"""
         self._validate_inputs(target_positions, target_velocities, target_torques, 2)
         
         cmd = lejuClawCommand()
@@ -596,7 +596,7 @@ class LejuClaw:
         self._pub_leju_claw_cmd.publish(cmd)
 
     def control_left(self, target_positions: list, target_velocities: list = None, target_torques: list = None):
-        """控制左手"""
+        """Left hand control Left hand control"""
         self._validate_inputs(target_positions, target_velocities, target_torques, 1)
         self.control(
             [target_positions[0], 0],
@@ -605,7 +605,7 @@ class LejuClaw:
         )
 
     def control_right(self, target_positions: list, target_velocities: list = None, target_torques: list = None):
-        """控制右手"""
+        """Right hand control"""
         self._validate_inputs(target_positions, target_velocities, target_torques, 1)
         self.control(
             [0, target_positions[0]],
@@ -614,7 +614,7 @@ class LejuClaw:
         )
 
     def _validate_inputs(self, positions, velocities, torques, expected_len):
-        """验证输入参数"""
+        """Validate input parameters Validate input parameters"""
         assert len(positions) == expected_len, f"target_positions must be a list of length {expected_len}"
         if velocities is not None:
             assert len(velocities) == expected_len, f"target_velocities must be a list of length {expected_len}"
@@ -622,27 +622,27 @@ class LejuClaw:
             assert len(torques) == expected_len, f"target_torques must be a list of length {expected_len}"
 
     def _get_default_velocities(self, velocities, length):
-        """获取默认速度"""
+        """Obtain default velocities"""
         if velocities is None:
             return [90] * length
         return [max(0.0, min(100.0, vel)) for vel in velocities]
 
     def _get_default_torques(self, torques, length):
-        """获取默认力矩"""
+        """Obtain default torques Obtain default torques"""
         if torques is None:
             return [1.0] * length
         return [max(0.0, min(10.0, torque)) for torque in torques]
 
     def close(self):
-        """释放资源"""
+        """Release resources Release resources"""
         if hasattr(self, 'ros_manager'):
             self.ros_manager.close()
 
-# 使用示例
+#Usage example
 if __name__ == "__main__":
     from kuavo_deploy.config import load_kuavo_config
     
-    # 使用上下文管理器确保资源正确释放
+    #Use context manager to ensure resources are properly released Use context manager to ensure resources are properly released
     with KuavoBaseRosEnv(load_kuavo_config()) as env:
         obs, info = env.reset()
 

@@ -1,94 +1,94 @@
-# LingBot 真机测试流程
+# LingBot real machine testing process
 
-## 机器人启动流程
+## Robot startup process
 
-连接Kuavo-manipulation网络，密码：manipulation
-通过http://192.168.5.1/可以登陆后台界面查看连接设备的IP
+Connect to Kuavo-manipulation network, password: manipulation
+You can log in to the backend interface through http://192.168.5.1/ to view the IP of the connected device.
 
-确保上下位机和边侧设备之间在同一个网段可以互相通信
+Ensure that the upper and lower computers and side devices can communicate with each other on the same network segment
 
-连接机器人下位机： ssh lab@192.168.5.117   密码：三个空格
+Connect to the robot lower computer: ssh lab@192.168.5.117 Password: three spaces
 
 `cd kuavo-ros-control`
 
 `sudo su`
 
-`roslaunch humanoid_controllers load_kuavo_real.launch`   启动运动控制节点
+`roslaunch humanoid_controllers load_kuavo_real.launch` starts the motion control node
 
-连接机器人上位机： ssh leju_kuavo@192.168.5.111   密码：leju_kuavo
+Connect to the robot host computer: ssh leju_kuavo@192.168.5.111 Password: leju_kuavo
 
-本地4090电脑，需要和上位机配置好主从
+The local 4090 computer needs to be configured with the host computer as master and slave.
 
-上位机启动相机
+Start the camera on the host computer
 
 `sudo systemctl start start_camera.service`
 
 `sudo systemctl restart start_camera.service`
 
-如果发现相机启动不起来，可能是主机的ROS_MASTER_URI的问题，需要修改/etc/kuavo.conf，将 ROS_MASTER_URI 从指向本机改为指向远程 ROS Master 所在的机器。不要修改到ROS_IP
+If you find that the camera cannot start, it may be a problem with the ROS_MASTER_URI of the host. You need to modify /etc/kuavo.conf and change the ROS_MASTER_URI from pointing to the local machine to pointing to the machine where the remote ROS Master is located. Do not modify to ROS_IP
 
-如果在边侧机启动python kuavo_deploy/src/scripts/script.py推理不了，一直报错话题为空等待，而上位机，下位机和边侧机之间能相互ping通，这时候需要修改边侧机的/etc/hosts，增加kuavo_master
+If you start python kuavo_deploy/src/scripts/script.py on the side machine and cannot reason, and keep reporting an error that the topic is empty and waiting, but the host machine, the slave machine and the side machine can ping each other, then you need to modify the /etc/hosts of the side machine and add kuavo_master
 ```
 127.0.0.1	localhost
 127.0.1.1	myl
 192.168.5.165   kuavo_master
 ```
-边侧机消息的却缺失可以直接从下位机上拷贝kuavo-ros-control
+If the side computer message is missing, you can directly copy kuavo-ros-control from the lower computer.
 
-头部控制：
+Head control:
 
-下位机随便一个仓库（我自己是kuavo-ros-control）source后：
+After source from any warehouse on the lower computer (my own is kuavo-ros-control):
 
 `rostopic pub /robot_head_motion_data kuavo_msgs/robotHeadMotionData "joint_data: [0.0, 27.0]" --once`
 
-- 恢复零位
+-Restore zero position
 
 `python kuavo_deploy/src/scripts/script.py --task back_to_zero --config configs/deploy/kuavo_env.lmy_go_run.yaml`
 
-- 重播bag包测试
+- Replay bag tests
 
 `python kuavo_deploy/src/scripts/script.py --task go --config configs/deploy/kuavo_env.lmy_go_run.yaml`
 
-- 模型推理测试
+- Model inference testing
 `python kuavo_deploy/src/scripts/script.py --task run --config configs/deploy/kuavo_env.lmy_go_run.yaml`
 
 ---
 
-本文档针对当前仓库中基于 LingBot 的真机部署测试，假设你已经完成：
+This document is for the real machine deployment test based on LingBot in the current warehouse. It is assumed that you have completed:
 
-- LingBot 模型训练；
-- `configs/deploy/kuavo_env.yaml` 已按当前数据集改成单右臂部署配置；
-- 使用环境为 `kdc_dev`；
-- 真机侧已具备 `kuavo-ros-opensource` 运行条件。
+- LingBot model training;
+- `configs/deploy/kuavo_env.yaml` has been changed to a single right-arm deployment configuration according to the current data set;
+- The usage environment is `kdc_dev`;
+- The real machine side already has the running conditions of `kuavo-ros-opensource`.
 
-当前配置对应的数据特征为：
+The data characteristics corresponding to the current configuration are:
 
 - `observation.images.head_cam_h`
 - `observation.images.wrist_cam_r`
 - `observation.state`
 - `action`
 
-也就是“头部相机 + 右腕相机 + 右臂状态/动作”的单臂任务。
+That is, the single-arm task of "head camera + right wrist camera + right arm status/action".
 
-## 1. 上机前检查
+## 1. Check before boarding the machine
 
-先确认下面几项已经就绪：
+First make sure the following items are in place:
 
-- 当前环境为 `kdc_dev`
-- `configs/deploy/kuavo_env.yaml` 中 `policy_type` 为 `lingbot`
-- `configs/deploy/kuavo_env.yaml` 中 `go_bag_path` 已改成真实绝对路径
-- `configs/deploy/kuavo_env.yaml` 中 `pretrained_path` 指向真实存在的 LingBot `hf_ckpt`
-- 真机 ROS 话题与配置一致
+- The current environment is `kdc_dev`
+- `policy_type` in `configs/deploy/kuavo_env.yaml` is `lingbot`
+- `go_bag_path` in `configs/deploy/kuavo_env.yaml` has been changed to the real absolute path
+- `pretrained_path` in `configs/deploy/kuavo_env.yaml` points to the real LingBot `hf_ckpt`
+- The real machine ROS topic and configuration are consistent
 
-建议先检查模型路径：
+It is recommended to check the model path first:
 
 ```bash
 ls /home/yunxi/lmy/VLA/kuavo_data_challenge/outputs/train/lingbot_task/lingbot_post_train/run_20260314_061741/checkpoints/global_step_15300/hf_ckpt
 ```
 
-## 2. 启动真机底层
+## 2. Start the bottom layer of the real machine
 
-在部署终端中执行：
+Execute in deployment terminal:
 
 ```bash
 conda activate kdc_dev
@@ -96,15 +96,15 @@ source /opt/ros/noetic/setup.bash
 roslaunch humanoid_controllers load_kuavo_real.launch
 ```
 
-如果是首次开机并需要校准：
+If this is the first time you turn on your computer and need calibration:
 
 ```bash
 roslaunch humanoid_controllers load_kuavo_real.launch cali:=true
 ```
 
-## 3. 检查 ROS 观测链路
+## 3. Check ROS observation link
 
-在新终端中执行：
+Execute in a new terminal:
 
 ```bash
 conda activate kdc_dev
@@ -115,18 +115,18 @@ rostopic echo /sensors_data_raw
 rostopic echo /leju_claw_state
 ```
 
-至少要确认：
+At least confirm:
 
-- 头部 RGB 有数据；
-- 右腕 RGB 有数据；
-- 关节状态有数据；
-- 夹爪状态有数据。
+- The head RGB has data;
+- Right wrist RGB has data;
+- There is data on joint status;
+- The gripper status has data.
 
-如果这些话题和 `configs/deploy/kuavo_env.yaml` 不一致，先改配置再继续。
+If these topics are inconsistent with `configs/deploy/kuavo_env.yaml`, change the configuration before continuing.
 
-## 4. 第一阶段测试：只测试 `go.bag`
+## 4. The first stage of testing: only test `go.bag`
 
-先不要跑模型，只测到达起始位：
+Don't run the model yet, just measure reaching the starting position:
 
 ```bash
 conda activate kdc_dev
@@ -136,18 +136,18 @@ python kuavo_deploy/src/scripts/script.py \
   --config configs/deploy/kuavo_env.yaml
 ```
 
-这一步通过说明：
+This step is explained by:
 
-- `go_bag_path` 可读；
-- 轨迹回放链路正常；
-- 当前右臂和夹爪控制映射没有明显错误；
-- 起始位至少是可达的。
+- `go_bag_path` is readable;
+- The track playback link is normal;
+- There are no obvious errors in the current right arm and gripper control mapping;
+- The starting position is at least reachable.
 
-如果这一步动作不安全，不要继续跑模型。
+If this step is unsafe, do not continue running the model.
 
-## 5. 第二阶段测试：从当前位置直接跑模型
+## 5. Second stage test: run the model directly from the current position
 
-将机器人手动放到安全起始位，先从当前位置直接推理，不走 `go.bag`：
+Manually place the robot in a safe starting position, and first reason directly from the current position without moving `go.bag`:
 
 ```bash
 conda activate kdc_dev
@@ -157,23 +157,23 @@ python kuavo_deploy/src/scripts/script.py \
   --config configs/deploy/kuavo_env.yaml
 ```
 
-这一步主要验证：
+This step mainly verifies:
 
-- LingBot checkpoint 能否加载；
-- 头部 + 右腕 + 8 维 state 能否正常进入模型；
-- 模型输出动作能否下发给真机；
-- 动作方向是否基本合理。
+- Whether LingBot checkpoint can be loaded;
+- Whether the head + right wrist + 8-dimensional state can enter the model normally;
+- Can the model output actions be sent to the real machine;
+- Whether the direction of action is basically reasonable.
 
-真机第一次测试建议：
+Suggestions for first test on real machine:
 
 - `eval_episodes=1`
-- 旁边有人值守
-- 随时准备物理急停
-- 只看前几步动作是否合理
+- Someone is on duty nearby
+- Be prepared for physical emergency stops at any time
+- Only look at whether the first few steps are reasonable
 
-## 6. 第三阶段测试：完整 `go_run`
+## 6. The third phase of testing: complete `go_run`
 
-当前两步都通过后，再执行完整测试：
+After the current two steps have passed, perform the complete test:
 
 ```bash
 conda activate kdc_dev
@@ -183,30 +183,30 @@ python kuavo_deploy/src/scripts/script.py \
   --config configs/deploy/kuavo_env.yaml
 ```
 
-它会执行：
+It will execute:
 
-1. 先按 `go.bag` 到任务起始姿态
-2. 然后启动 LingBot 推理
+1. First press `go.bag` to get to the mission starting posture
+2. Then start LingBot inference
 
-这是最接近正式部署的流程。
+This is the closest process to a formal deployment.
 
-## 7. 暂停、停止与回零
+## 7. Pause, stop and return to zero
 
-`script.py` 启动后会打印当前进程 PID。
+`script.py` will print the current process PID after starting.
 
-暂停 / 恢复：
+Pause/Resume:
 
 ```bash
 kill -USR1 <pid>
 ```
 
-停止：
+Stop:
 
 ```bash
 kill -USR2 <pid>
 ```
 
-如果停止后需要回到安全位：
+If you need to return to a safe position after stopping:
 
 ```bash
 conda activate kdc_dev
@@ -216,44 +216,44 @@ python kuavo_deploy/src/scripts/script.py \
   --config configs/deploy/kuavo_env.yaml
 ```
 
-建议在第一次真机测试前，单独验证一次 `back_to_zero`。
+It is recommended to verify `back_to_zero` separately before the first real machine test.
 
-## 8. 推荐测试顺序
+## 8. Recommended test order
 
-建议严格按下面顺序执行：
+It is recommended to strictly follow the following order:
 
-1. 启动真机底层
-2. 检查 4 个关键话题
-3. 测 `go`
-4. 测 `run`
-5. 最后测 `go_run`
+1. Start the bottom layer of the real machine
+2. Check out 4 key topics
+3. Test `go`
+4. Test `run`
+5. Final test `go_run`
 
-不要一开始就直接上 `go_run`。
+Don’t jump right into `go_run` from the beginning.
 
-## 9. 常见问题
+## 9. FAQ
 
-- `机械臂初始化失败`
-  - 优先检查 `kuavo-humanoid-sdk` 版本是否和机器人侧一致。
+- `Robotic arm initialization failed`
+  - Prioritize checking whether the version of `kuavo-humanoid-sdk` is consistent with the robot side.
 
-- `LingBot import 失败`
-  - 确认当前环境为 `kdc_dev`，并且该环境里能正常导入 LingBot 相关模块。
+- `LingBot import failed`
+  - Confirm that the current environment is `kdc_dev`, and that LingBot related modules can be imported normally in this environment.
 
-- `缺少 wrist_cam_l`
-  - 当前仓库已修改 `lingbot_adapter.py`，允许在只有右腕图的情况下部署。
+- `wrist_cam_l is missing`
+  - The current repository has modified `lingbot_adapter.py` to allow deployment when only the right wrist image is available.
 
-- 模型能启动但动作异常
-  - 优先检查：
+- The model can be started but behaves abnormally
+  - Priority checks:
     - `which_arm: right`
-    - `obs_key_map` 是否对应真机实际话题
-    - `pretrained_path` 是否是正确的单右臂 LingBot checkpoint
-    - `go.bag` 是否适配当前机器人姿态
+    - Whether `obs_key_map` corresponds to actual topics on real machines
+    - Whether `pretrained_path` is the correct single right arm LingBot checkpoint
+    - `go.bag` Whether to adapt to the current robot posture
 
-- `go.bag` 回放正常，但 `run` 异常
-  - 说明轨迹链路没问题，重点排查模型输入、checkpoint 和观测维度。
+- `go.bag` playback is normal, but `run` is abnormal
+  - It indicates that there is no problem with the trajectory link. Focus on checking the model input, checkpoint and observation dimensions.
 
-## 10. 关键文件
+## 10. Key documents
 
-- 部署配置：[configs/deploy/kuavo_env.yaml](/home/yunxi/lmy/VLA/kuavo_data_challenge/configs/deploy/kuavo_env.yaml)
-- 真机脚本：[kuavo_deploy/src/scripts/script.py](/home/yunxi/lmy/VLA/kuavo_data_challenge/kuavo_deploy/src/scripts/script.py)
-- 真机推理入口：[kuavo_deploy/src/eval/real_single_test.py](/home/yunxi/lmy/VLA/kuavo_data_challenge/kuavo_deploy/src/eval/real_single_test.py)
-- LingBot 部署适配器：[kuavo_deploy/utils/lingbot_adapter.py](/home/yunxi/lmy/VLA/kuavo_data_challenge/kuavo_deploy/utils/lingbot_adapter.py)
+- Deployment configuration: [configs/deploy/kuavo_env.yaml](/home/yunxi/lmy/VLA/kuavo_data_challenge/configs/deploy/kuavo_env.yaml)
+- Real device script: [kuavo_deploy/src/scripts/script.py](/home/yunxi/lmy/VLA/kuavo_data_challenge/kuavo_deploy/src/scripts/script.py)
+- Real machine reasoning entrance: [kuavo_deploy/src/eval/real_single_test.py](/home/yunxi/lmy/VLA/kuavo_data_challenge/kuavo_deploy/src/eval/real_single_test.py)
+- LingBot deployment adapter: [kuavo_deploy/utils/lingbot_adapter.py](/home/yunxi/lmy/VLA/kuavo_data_challenge/kuavo_deploy/utils/lingbot_adapter.py)

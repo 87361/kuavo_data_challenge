@@ -1,15 +1,15 @@
 """
-分块流式rosbag转换器 - 低内存版本
+Chunked streaming rosbag converter - low memory version
 
-核心优化（参考Diffusion Policy的按需读取方式）：
-1. 第一遍扫描：只读取时间戳（内存占用几MB）
-2. 第二遍扫描：按时间窗口分块读取+对齐+写入dataset
+Core optimization (refer to the on-demand reading method of Diffusion Policy):
+1. First pass of scan: only read timestamp (memory occupied a few MB)
+2. The second scan: read in blocks by time window + align + write to the dataset
 
-与原始CvtRosbag2Lerobot.py的区别：
-- 原始：一次性加载整个rosbag到内存 → 对齐 → 写入（内存峰值巨大）
-- 本版：分块读取 → 即时对齐 → 即时写入 → 释放内存（内存可控）
+Differences from original CvtRosbag2Lerobot.py:
+- Original: Load the entire rosbag into memory at once→ Alignment→ Write (memory peak is huge)
+- This version: chunked reading→ Instant alignment→ instant write→ Release memory (memory controllable)
 
-使用方法：
+How to use:
     python CvtRosbag2Lerobot_chunked.py --config-name=KuavoRosbag2Lerobot \
         rosbag.rosbag_dir=/path/to/rosbag \
         rosbag.lerobot_dir=/path/to/output \
@@ -74,7 +74,7 @@ def create_empty_dataset_chunked(
     root: str,
 ) -> LeRobotDataset:
     
-    # 根据config的参数决定是否为半身和末端的关节类型
+    #Determine whether it is the joint type of the half body and end according to the parameters of config
     motors = DEFAULT_JOINT_NAMES_LIST
     # TODO: auto detect cameras
     cameras = kuavo.DEFAULT_CAMERA_NAMES
@@ -91,10 +91,10 @@ def create_empty_dataset_chunked(
     state_name = motors
 
     if not kuavo.ONLY_HALF_UP_BODY:
-        action_dim = (action_dim[0] + 3 + 1,)  # cmd_pos_world3+断点标志1
+        action_dim = (action_dim[0] + 3 + 1,)  #cmd_pos_world3+breakpoint flag 1
         action_name += ["cmd_pos_x", "cmd_pos_y", "cmd_pos_yaw", "ctrl_change_cmd"]
-        state_dim = (state_dim[0] + 0,)  # 机器人base_pos_world3+断点标志1
-        state_name += []  # 如上 ["base_pos_x", "base_pos_y", "base_pos_yaw", "ctrl_change_flag"]
+        state_dim = (state_dim[0] + 0,)  #Robot base_pos_world3 + breakpoint flag 1
+        state_name += []  #As above ["base_pos_x", "base_pos_y", "base_pos_yaw", "ctrl_change_flag"]
 
     # create corresponding features
     features = {
@@ -179,19 +179,19 @@ def populate_dataset_chunked(
     chunk_size: int = 100,
 ) -> LeRobotDataset:
     """
-    使用分块流式处理填充数据集
+    Populate a dataset using chunked streaming
     
-    核心优化：
-    1. 第一遍扫描只读取时间戳（内存几MB）
-    2. 第二遍扫描按时间窗口分块读取+对齐+写入
-    3. 每个chunk处理完立即保存并释放内存
+    Core optimization:
+    1. The first scan only reads the timestamp (a few MB of memory)
+    2. The second scan is divided into blocks according to the time window to read + align + write
+    3. Save and release memory immediately after each chunk is processed
     
     Args:
-        dataset: LeRobotDataset实例
-        bag_files: rosbag文件路径列表
-        task: 任务描述
-        episodes: 要处理的episode索引列表
-        chunk_size: 每个chunk包含的帧数（默认100帧）
+        dataset: LeRobotDatasetExample
+        bag_files: rosbagfile path list
+        task: Task description
+        episodes: List of episode indexes to process
+        chunk_size: The number of frames each chunk contains (default 100 frames)
     """
     if episodes is None:
         episodes = range(len(bag_files))
@@ -200,7 +200,7 @@ def populate_dataset_chunked(
     log_print.info(f"Total episodes to process: {len(episodes)}")
     bag_reader = kuavo.KuavoRosbagReader()
     
-    # 内存监控
+    #Memory monitoring
     process = None
     try:
         import psutil
@@ -219,12 +219,12 @@ def populate_dataset_chunked(
         log_memory("Before processing")
         
         try:
-            # 收集当前episode的所有帧
+            #Collect all frames of the current episode
             frames_buffer = []
             frame_count = [0]
             
             def on_frame(aligned_frame: dict, frame_idx: int):
-                """处理单帧对齐数据"""
+                """Processing single frame alignment data"""
 
                 def get_array(key, dtype, default_empty=True):
                     item = aligned_frame.get(key)
@@ -243,7 +243,7 @@ def populate_dataset_chunked(
                     return
 
                 # =========================
-                # 2. arm trajectory（alt 优先）
+                #2. arm trajectory (alt priority)
                 # =========================
                 arm_traj     = get_array("action.kuavo_arm_traj", np.float32)
                 arm_traj_alt = get_array("action.kuavo_arm_traj_alt", np.float32)
@@ -251,12 +251,12 @@ def populate_dataset_chunked(
                     return
                 action[12:26] = arm_traj_alt if arm_traj_alt.size else arm_traj
                 
-                # 接口留用
+                #Interface reserved
                 velocity = None
                 effort = None
 
                 # =========================
-                # 3. 手部数据读取
+                #3. Hand data reading
                 # =========================
                 claw_state     = get_array("observation.claw", np.float64)
                 claw_action    = get_array("action.claw", np.float64)
@@ -270,7 +270,7 @@ def populate_dataset_chunked(
                 if claw_action.size == 0 and qiangnao_action.size==0 and rq2f85_action.size ==0:
                     return
                 # =========================
-                # 4. 手部归一化（保持原逻辑）
+                #4. Hand normalization (maintain original logic)
                 # =========================
                 if kuavo.IS_BINARY:
                     qiangnao_state  = np.where(qiangnao_state > 50, 1, 0)
@@ -296,7 +296,7 @@ def populate_dataset_chunked(
                     claw_state  = rq2f85_state
 
                 # =========================
-                # 5. 构建最终 state / action
+                #5. Build the final state/action
                 # =========================
                 if kuavo.USE_LEJU_CLAW or kuavo.USE_QIANGNAO:
                     hand_type = "LEJU" if kuavo.USE_LEJU_CLAW else "QIANGNAO"
@@ -351,7 +351,7 @@ def populate_dataset_chunked(
                     )
 
                 # =========================
-                # 7. 构建 frame
+                #7. Build frame
                 # =========================
                 frame = {
                     "observation.state": torch.from_numpy(final_state).type(torch.float32),
@@ -383,22 +383,22 @@ def populate_dataset_chunked(
 
             
             def on_chunk_done():
-                """每个chunk处理完后的回调：保存并释放内存"""
+                """Callback after each chunk is processed: save and release memory"""
                 if len(frames_buffer) == 0:
                     return
                 
-                # 将所有缓存的帧添加到dataset
+                #Add all cached frames to dataset
                 for frame in frames_buffer:
                     frame["task"] = task
                     dataset.add_frame(frame)
                 
-                # 清空buffer并释放内存
+                #Clear the buffer and release memory
                 frames_buffer.clear()
                 gc.collect()
                 
                 log_memory(f"After saving chunk (total frames: {frame_count[0]})")
             
-            # 使用分块流式处理
+            #Using chunked streaming
             bag_reader.process_rosbag_chunked(
                 bag_file=str(ep_path),
                 frame_callback=on_frame,
@@ -406,7 +406,7 @@ def populate_dataset_chunked(
                 save_callback=on_chunk_done
             )
              
-            # 处理剩余的帧
+            #Process remaining frames
             if len(frames_buffer) > 0:
                 for frame in frames_buffer:
                     dataset.add_frame(frame, task=task)
@@ -449,13 +449,13 @@ def port_kuavo_rosbag_chunked(
     chunk_size: int = 100,
 ):
     """
-    分块流式转换rosbag到LeRobot格式
+    Chunked streaming of rosbag to LeRobot format
     
     Args:
-        raw_dir: rosbag目录
-        repo_id: 输出数据集ID
-        task: 任务描述
-        chunk_size: 每个chunk的帧数（默认100）
+        raw_dir: rosbagDirectory
+        repo_id: Output dataset ID
+        task: Task description
+        chunk_size: Number of frames per chunk (default 100)
     """
     if (LEROBOT_HOME / repo_id).exists():
         shutil.rmtree(LEROBOT_HOME / repo_id)
@@ -499,9 +499,9 @@ def port_kuavo_rosbag_chunked(
 )
 def main(cfg: DictConfig):
     """
-    分块流式转换入口
+    Chunked streaming conversion portal
     
-    使用方法：
+    How to use:
         python CvtRosbag2Lerobot_chunked.py \
             rosbag.rosbag_dir=/path/to/rosbag \
             rosbag.lerobot_dir=/path/to/output \

@@ -1,38 +1,38 @@
-# Lingbot 环境配置
-1. 安装好kdc环境
-2. 参考https://github.com/Robbyant/lingbot-vla的README.md，下载lingbot-vla-4b，Qwen2.5-VL-3B-Instruct模型
-3. 在kdc环境中，使用提供的lingbot-vla仓库，运行pip install -e .和pip install -r requirements.txt
-4. 在kdc环境中安装flash-attention，pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.6cxx11abiTRUE-cp310-cp310-linux_x86_64.whl
-5. 进入到kdc的third_party/lerobot文件夹，pip install -e .安装lerobot
-6. 边侧机使用1.3.3版本的kdc，pip install kuavo-humannoid-sdk==1.3.3，下位机使用了1.3.3版本的kuavo-ros-control，可以通过git reset --hard 1.3.3然后使用catkin build humanoid_cotrollers编译，需要修改src/kuavo_assets/config/kuavo_v49/kuavo.json把qiangnao替换成lejuclaw，否则无法监听到/leju_claw_state
+# Lingbot environment configuration
+1. Install the kdc environment
+2. Refer to the README.md of https://github.com/Robbyant/lingbot-vla to download the lingbot-vla-4b, Qwen2.5-VL-3B-Instruct model
+3. In the kdc environment, use the provided lingbot-vla warehouse and run pip install -e . and pip install -r requirements.txt
+4. Install flash-attention in the kdc environment, pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.6cxx11abiTRUE-cp310-cp310-linux_x86_64.whl
+5. Enter the third_party/lerobot folder of kdc, pip install -e. Install lerobot
+6. The side computer uses kdc version 1.3.3, pip install kuavo-humannoid-sdk==1.3.3, and the lower computer uses kuavo-ros-control version 1.3.3. You can use git reset --hard 1.3.3 and then use catkin build To compile humanoid_cotrollers, you need to modify src/kuavo_assets/config/kuavo_v49/kuavo.json to replace qiangnao with lejuclaw, otherwise /leju_claw_state cannot be monitored
 
-# LingBot 训练说明
+# LingBot Training Instructions
 
-本文说明如何在当前仓库中启动 LingBot 训练，以及两层配置文件的实际关系。
+This article explains how to start LingBot training in the current warehouse, and the actual relationship between the two layers of configuration files.
 
-## 1. 数据处理
+## 1. Data processing
 
-将rosbag转换为Lerobot数据集：
+Convert rosbag to Lerobot dataset:
 
 ```bash
 python kuavo_data/CvtRosbag2Lerobot.py --config-path=../configs/data/ --config-name=KuavoRosbag2Lerobot.yaml rosbag.rosbag_dir=/home/lmy/lmy_ws/Leju/kuavo_data_challenge/raw_data rosbag.lerobot_dir=/home/lmy/lmy_ws/Leju/pick_and_place
 ```
 
-根据数据集转换生成norm_stats配置文件用于训练和推理：
+Generate norm_stats configuration files based on data set transformation for training and inference:
 
 `  python kuavo_train/convert_stats_to_norm_stats.py \
     /home/lmy/lmy_ws/pick_and_place/pick_and_place0_4_2/meta/stats.json`
 
 
-## 1. 训练入口
+## 1. Training entrance
 
-当前训练入口命令：
+Current training entry command:
 
 ```bash
 python kuavo_train/train_policy.py --config-path=../configs/policy/ --config-name=lingbot_config.yaml
 ```
 
-lingbot_config.yaml需要修改：
+lingbot_config.yaml needs to be modified:
 
 1. `root: /data/limingyang/VLA/huggingface/pick_and_place/pick_and_place0_4_2`
 
@@ -40,73 +40,73 @@ lingbot_config.yaml需要修改：
 
 3. `tokenizer_path: /home/yunxi/lmy/VLA/Qwen2.5-VL-3B-Instruct`
 
-robotwin_load20000h.yaml需要修改：
+robotwin_load20000h.yaml needs to be modified:
 
-1. `norm_stats_file: assets/norm_stats/pick_and_place0_4_2.json`   需要和使用的数据集匹配
+1. `norm_stats_file: assets/norm_stats/pick_and_place0_4_2.json` needs to match the data set used
 
 
-Tensorboard可视化：
+Tensorboard visualization:
 
 ```bash
 tensorboard --logdir outputs/train/lingbot_task/lingbot_post_train --port 6007
 ```
 
-这条命令会走 `policy_name=lingbot` 分支，由 `kuavo_train/train_policy.py` 调起 `torchrun`，最终执行：
+This command will go to the `policy_name=lingbot` branch, call `torchrun` from `kuavo_train/train_policy.py`, and finally execute:
 
 ```text
 kuavo_train/lingbot/tasks/vla/train_lingbotvla.py
 ```
 
-## 2. 两层配置文件
+## 2. Two-tier configuration file
 
-训练实际由两层配置组成：
+Training actually consists of two layers of configuration:
 
-### 外层启动配置
+### Outer startup configuration
 
-文件：
+File:
 
 ```text
 configs/policy/lingbot_config.yaml
 ```
 
-作用：
+Function:
 
-- 指定训练入口使用 `lingbot`
-- 指定数据根目录 `root`
-- 指定模型路径 `policy.model_path`
-- 指定 tokenizer 路径 `policy.tokenizer_path`
-- 指定显卡 `training.gpu_ids` / `policy.env.CUDA_VISIBLE_DEVICES`
-- 指定外层输出目录模板 `training.output_directory`
-- 指定是否续训 `training.resume`
+- Specify the training entrance to use `lingbot`
+- Specify the data root directory `root`
+- Specify the model path `policy.model_path`
+- Specify tokenizer path `policy.tokenizer_path`
+- Specify the graphics card `training.gpu_ids` / `policy.env.CUDA_VISIBLE_DEVICES`
+- Specify the outer output directory template `training.output_directory`
+- Specify whether to continue training `training.resume`
 
-### 内层 LingBot 训练配置
+### Inner LingBot training configuration
 
-文件：
+File:
 
 ```text
 configs/policy/lingbot/robotwin_load20000h.yaml
 ```
 
-作用：
+Function:
 
-- 控制 LingBot 训练细节
-- 包括 `train.*`、`data.*`、`model.*` 的默认值
+- Control LingBot training details
+- Includes default values for `train.*`, `data.*`, `model.*`
 
-## 3. 配置优先级
+## 3. Configure priority
 
-优先级不是简单二选一，而是：
+The priority is not a simple choice between two, but:
 
-1. 先读取 `lingbot_config.yaml`
-2. 再读取 `robotwin_load20000h.yaml`
-3. 外层启动器把部分参数转成命令行参数
-4. 命令行参数覆盖 `robotwin_load20000h.yaml` 中对应字段
+1. First read `lingbot_config.yaml`
+2. Read `robotwin_load20000h.yaml` again
+3. The outer launcher converts some parameters into command line parameters
+4. Command line parameters cover the corresponding fields in `robotwin_load20000h.yaml`
 
-也就是说：
+That is to say:
 
-- **没有被外层传递的参数**，最终使用 `robotwin_load20000h.yaml`
-- **被外层显式传递的参数**，以外层为准
+- **No parameters passed by the outer layer**, finally use `robotwin_load20000h.yaml`
+- **Parameters explicitly passed by the outer layer**, whichever is the outer layer
 
-当前会被外层覆盖进去的关键参数包括：
+The key parameters currently covered by the outer layer include:
 
 - `data.train_path`
 - `train.action_dim`
@@ -115,16 +115,16 @@ configs/policy/lingbot/robotwin_load20000h.yaml
 - `train.output_dir`
 - `model.model_path`
 - `model.tokenizer_path`
-- 可选的 `model.moge_path`
-- 可选的 `model.morgbd_path`
+- Optional `model.moge_path`
+- Optional `model.morgbd_path`
 
-所以如果你改了 `lingbot_config.yaml` 里的很多 `training.*` 字段，但启动器没有把它透传给 LingBot，那么这些字段不会自动覆盖内层训练配置。
+So if you change many `training.*` fields in `lingbot_config.yaml`, but the launcher does not transparently pass it to LingBot, then these fields will not automatically overwrite the inner training configuration.
 
-## 4. 当前推荐训练方式
+## 4. Current recommended training methods
 
-### 4.1 先检查关键路径
+### 4.1 Check the critical path first
 
-请先确认这些路径存在：
+Please first confirm that these paths exist:
 
 ```text
 /home/yunxi/lmy/VLA/lingbot-vla
@@ -133,25 +133,25 @@ configs/policy/lingbot/robotwin_load20000h.yaml
 /home/yunxi/lmy/VLA/huggingface/lerobot/pick_and_place0_4_2
 ```
 
-### 4.2 直接启动训练
+### 4.2 Start training directly
 
 ```bash
 python kuavo_train/train_policy.py --config-path=../configs/policy/ --config-name=lingbot_config.yaml
 ```
 
-### 4.3 只看最终会启动什么命令
+### 4.3 Just look at what command will eventually be started
 
-如果只想检查最终生成的 `torchrun` 命令，不真正训练：
+If you just want to check the final generated `torchrun` command without actually training:
 
 ```bash
 python kuavo_train/train_policy.py --config-path=../configs/policy/ --config-name=lingbot_config.yaml policy.dry_run=true
 ```
 
-## 5. 当前配置建议
+## 5. Current configuration recommendations
 
-### 显卡
+### Graphics card
 
-如果你希望多卡训练，建议直接在 `configs/policy/lingbot_config.yaml` 中设置：
+If you want to train multiple cards, it is recommended to set it directly in `configs/policy/lingbot_config.yaml`:
 
 ```yaml
 policy:
@@ -159,32 +159,32 @@ policy:
     CUDA_VISIBLE_DEVICES: "0,1,2,3,4,5,6,7"
 ```
 
-如果不设置 `policy.env.CUDA_VISIBLE_DEVICES`，启动器会尝试参考 `training.gpu_ids`。
+If `policy.env.CUDA_VISIBLE_DEVICES` is not set, the launcher will try to refer to `training.gpu_ids`.
 
 ### batch size
 
-当前外层配置中的：
+In the current outer configuration:
 
 ```yaml
 training:
   batch_size: 1
 ```
 
-会被转换为：
+will be converted to:
 
 - `--train.micro_batch_size 1`
-- `--train.global_batch_size = micro_batch_size * GPU数`
+- `--train.global_batch_size = micro_batch_size * number of GPUs`
 
-例如 8 卡时，会变成：
+For example, when there are 8 cards, it will become:
 
 ```text
 micro_batch_size=1
 global_batch_size=8
 ```
 
-## 6. 续训
+## 6. Continue training
 
-外层配置里：
+In the outer configuration:
 
 ```yaml
 training:
@@ -192,96 +192,96 @@ training:
   resume_timestamp: "20260320_063225"
 ```
 
-当 `resume=true` 且 `resume_timestamp` 非空时，启动器会把输出目录切回旧 run 目录。
+When `resume=true` and `resume_timestamp` is not empty, the launcher will switch the output directory back to the old run directory.
 
-如果不续训：
+If you do not continue training:
 
 ```yaml
 training:
   resume: false
 ```
 
-则会生成新的：
+will generate a new one:
 
 ```text
 outputs/train/${task}/${method}/run_${timestamp}
 ```
 
-## 7. 如何修改训练逻辑
+## 7. How to modify training logic
 
-### 想改训练细节
+### Want to change training details
 
-请优先修改：
+Please modify it first:
 
 ```text
 configs/policy/lingbot/robotwin_load20000h.yaml
 ```
 
-例如：
+For example:
 
-- 学习率
+- learning rate
 - epoch
 - save_steps
 - FSDP / offload
-- tokenizer 长度
-- 其它 `train.*` / `data.*` 默认行为
+- tokenizer length
+- Other `train.*` / `data.*` default behaviors
 
-### 想改入口层行为
+### Want to change the behavior of the entry layer
 
-请修改：
+Please modify:
 
 ```text
 configs/policy/lingbot_config.yaml
 ```
 
-例如：
+For example:
 
-- 数据根目录
-- 模型路径
-- tokenizer 路径
-- 显卡
-- 是否 dry run
-- 是否 resume
-- 输出目录模板
+- Data root directory
+- model path
+- tokenizer path
+- Graphics card
+- Whether to dry run
+- whether to resume
+- Output directory template
 
-## 8. 推荐使用习惯
+## 8. Recommended usage habits
 
-- 把真正的 LingBot 训练参数放在 `robotwin_load20000h.yaml`
-- 把外层路径、显卡、resume、输出目录放在 `lingbot_config.yaml`
-- 改完后先跑一次 `policy.dry_run=true`
-- 确认生成的 `torchrun` 命令正确，再开始正式训练
+- Put the real LingBot training parameters in `robotwin_load20000h.yaml`
+- Put the outer path, graphics card, resume, and output directory in `lingbot_config.yaml`
+- After modification, run `policy.dry_run=true`
+- Confirm that the generated `torchrun` command is correct before starting formal training
 
-## 9. 真机部署与测试
+## 9. Real machine deployment and testing
 
-### 9.1 前提假设
+### 9.1 Premise
 
-默认你已经完成：
+By default you have completed:
 
-- LingBot 模型训练
-- `configs/deploy/kuavo_env.yaml` 已改成当前数据集对应的部署配置
-- 当前使用环境为 `kdc_dev`
-- 真机侧已具备 `kuavo-ros-opensource` 运行条件
+- LingBot model training
+- `configs/deploy/kuavo_env.yaml` has been changed to the deployment configuration corresponding to the current data set
+- The current usage environment is `kdc_dev`
+- The real machine side already has the `kuavo-ros-opensource` running conditions
 
-当前部署特征对应：
+The current deployment characteristics correspond to:
 
 - `observation.images.head_cam_h`
 - `observation.images.wrist_cam_r`
 - `observation.state`
 - `action`
 
-也就是“头部相机 + 右腕相机 + 单右臂状态/动作”的配置。
+That is, the configuration of "head camera + right wrist camera + single right arm status/action".
 
-### 9.2 机器人与网络准备
+### 9.2 Robot and network preparation
 
-连接 `Kuavo-manipulation` 网络后，可通过 `http://192.168.5.1/` 查看当前设备 IP。确保上下位机和边侧设备处于同一网段并且可以互相通信。
+After connecting to the `Kuavo-manipulation` network, you can view the current device IP through `http://192.168.5.1/`. Make sure that the upper and lower computers and side devices are in the same network segment and can communicate with each other.
 
-连接机器人下位机：
+Connect the robot slave machine:
 
 ```bash
 ssh lab@192.168.5.117
 ```
 
-进入控制仓库后启动运动控制节点：
+After entering the control warehouse, start the motion control node:
 
 ```bash
 cd kuavo-ros-control
@@ -289,51 +289,51 @@ sudo su
 roslaunch humanoid_controllers load_kuavo_real.launch
 ```
 
-连接机器人上位机：
+Connect to the robot host computer:
 
 ```bash
 ssh leju_kuavo@192.168.5.111
 ```
 
-启动相机：
+Start the camera:
 
 ```bash
 sudo systemctl start start_camera.service
 sudo systemctl restart start_camera.service
 ```
 
-如果相机起不来，优先检查上位机的 `/etc/kuavo.conf` 里的 `ROS_MASTER_URI` 是否指向正确的远程 ROS Master，注意不要误改 `ROS_IP`。
+If the camera cannot start, first check whether the `ROS_MASTER_URI` in the `/etc/kuavo.conf` of the host computer points to the correct remote ROS Master, and be careful not to change `ROS_IP` by mistake.
 
-如果边侧机运行部署脚本时一直提示话题为空，但三台机器之间网络互通，需要检查边侧机 `/etc/hosts` 中是否补了 `kuavo_master` 映射，例如：
+If the side machine keeps prompting that the topic is empty when running the deployment script, but the network between the three machines is interconnected, you need to check whether the `kuavo_master` mapping has been added to the side machine `/etc/hosts`, for example:
 
 ```text
 127.0.0.1 localhost
 127.0.1.1 myl
 192.168.5.165 kuavo_master
 ```
-注意如果出现消息不通的情况，要检查对应设备上的~/.bashrc和/etc/hosts
+Note that if there is a message failure, check ~/.bashrc and /etc/hosts on the corresponding device.
 
-如果边侧机消息定义缺失，也可以直接从下位机拷贝 `kuavo-ros-control`。
+If the side computer message definition is missing, you can also copy `kuavo-ros-control` directly from the lower computer.
 
-### 9.3 上机前检查
+### 9.3 Check before boarding the machine
 
-建议先确认：
+It is recommended to confirm first:
 
-- 当前环境是 `kdc_dev`
-- `configs/deploy/kuavo_env.yaml` 中 `policy_type: lingbot`
-- `configs/deploy/kuavo_env.yaml` 中 `go_bag_path` 已改为真实绝对路径
-- `configs/deploy/kuavo_env.yaml` 中 `pretrained_path` 指向真实存在的 LingBot `hf_ckpt`
-- 真机 ROS 话题和部署配置一致
+- The current environment is `kdc_dev`
+- `policy_type: lingbot` in `configs/deploy/kuavo_env.yaml`
+- `go_bag_path` in `configs/deploy/kuavo_env.yaml` has been changed to the real absolute path
+- `pretrained_path` in `configs/deploy/kuavo_env.yaml` points to the real LingBot `hf_ckpt`
+- The real machine ROS topic and deployment configuration are consistent
 
-可以先检查模型目录：
+You can check the model directory first:
 
 ```bash
 ls /home/yunxi/lmy/VLA/kuavo_data_challenge/outputs/train/lingbot_task/lingbot_post_train/run_20260314_061741/checkpoints/global_step_15300/hf_ckpt
 ```
 
-### 9.4 检查 ROS 观测链路
+### 9.4 Check ROS observation link
 
-在新终端执行：
+Execute in a new terminal:
 
 ```bash
 conda activate kdc_dev
@@ -344,77 +344,77 @@ rostopic echo /sensors_data_raw
 rostopic echo /leju_claw_state
 ```
 
-至少确认以下四类观测存在：
+At least confirm the existence of the following four types of observations:
 
-- 头部 RGB
-- 右腕 RGB
-- 关节状态
-- 夹爪状态
+- Head RGB
+- Right wrist RGB
+- joint status
+- Gripper status
 
-如果这些话题和 `configs/deploy/kuavo_env.yaml` 不一致，先改配置，再继续部署。
+If these topics are inconsistent with `configs/deploy/kuavo_env.yaml`, change the configuration first and then continue deployment.
 
-### 9.5 真机测试顺序
+### 9.5 Real machine test sequence
 
-建议严格按下面顺序进行：
+It is recommended to proceed strictly in the following order:
 
-1. 启动真机底层
-2. 检查 4 个关键话题
-3. 测 `go`
-4. 测 `run`
-5. 最后测 `go_run`
+1. Start the bottom layer of the real machine
+2. Check out 4 key topics
+3. Test `go`
+4. Test `run`
+5. Final test `go_run`
 
-不要一开始直接跑 `go_run`。
+Don't run `go_run` directly at the beginning.
 
-#### 第一阶段：只测试 `go.bag`
+#### Phase 1: Only test `go.bag`
 
 ```bash
 conda activate kdc_dev
 source /opt/ros/noetic/setup.bash
 python kuavo_deploy/src/scripts/script.py --task go --config configs/deploy/kuavo_env.lmy_go_run.yaml
 ```
-kuavo_env.lmy_go_run.yaml需要修改的地方：
-1. rosbag路径：
+Things that need to be modified in kuavo_env.lmy_go_run.yaml:
+1. rosbag path:
 
 `go_bag_path: /home/lmy/lmy_ws/Leju/kuavo_data_challenge_dev/raw_data/A01-A02-A02-A02-A02-A03-P4_000-leju_claw-20260309165457-v002.bag`
 
-2. 预训练模型路径：
+2. Pre-training model path:
 
 `pretrained_path: "/home/lmy/lmy_ws/Leju/kuavo_data_challenge_master/models/run_20260323_060215_7005/run_20260323_060215/checkpoints/global_step_7005/hf_ckpt"`
 
-3. lingbot-vla路径：
+3. lingbot-vla path:
 
 `lingbot_root: "/home/lmy/lmy_ws/Leju/lingbot-vla"`
 
-4. 推理的chunk:
+4. Inference chunk:
 
 `lingbot_use_length: 5`
 
-5. norm_stats文件：
+5. norm_stats file:
 
 `lingbot_norm_stats_file: "/home/lmy/lmy_ws/Leju/kuavo_data_challenge_master/assets/norm_stats/pick_and_place0_4_2.json"`
 
-6. 如果lingbot_use_length大于1，lingbot_chunk_ret需要设置为false
+6. If lingbot_use_length is greater than 1, lingbot_chunk_ret needs to be set to false
 
-7. Qwen2.5路径：
+7. Qwen2.5 path:
 
 `qwen25_path: "/home/lmy/lmy_ws/Leju/Qwen2.5-VL-3B-Instruct"`
 
-通过这一步说明：
+Instructions through this step:
 
-- `go_bag_path` 可读
-- 轨迹回放链路正常
-- 当前右臂和夹爪控制映射没有明显错误
-- 起始位至少可达
+- `go_bag_path` is readable
+- Track playback link is normal
+- There are no obvious errors in the current right arm and gripper control mapping
+- The starting position is at least reachable
 
-如果这一步动作不安全，不要继续跑模型。
+If this step is unsafe, do not continue running the model.
 
-#### 第二阶段：从当前位置直接跑模型
+#### Second stage: run the model directly from the current position
 
-在终端给QWEN2.5的路径：
+Give the path to QWEN2.5 in the terminal:
 
 `export QWEN25_PATH=/home/yunxi/lmy/VLA/Qwen2.5-VL-3B-Instruct`
 
-将机器人手动放到安全起始位，然后执行：
+Manually place the robot in the safe starting position and then execute:
 
 ```bash
 conda activate kdc_dev
@@ -422,23 +422,23 @@ source /opt/ros/noetic/setup.bash
 python kuavo_deploy/src/scripts/script.py --task run --config configs/deploy/kuavo_env.lmy_go_run.yaml
 ```
 
-这一步主要验证：
+This step mainly verifies:
 
-- LingBot checkpoint 能否加载
-- 头部 + 右腕 + 8 维 state 能否正常进入模型
-- 模型输出动作能否成功下发给真机
-- 动作方向是否基本合理
+- Can LingBot checkpoint be loaded?
+- Can the head + right wrist + 8-dimensional state enter the model normally?
+- Whether the model output action can be successfully sent to the real machine
+- Is the direction of action basically reasonable?
 
-真机第一次测试建议：
+Suggestions for first test on real machine:
 
 - `eval_episodes=1`
-- 旁边有人值守
-- 随时准备物理急停
-- 只观察前几步动作是否合理
+- Someone is on duty nearby
+- Be prepared for physical emergency stops at any time
+- Only observe whether the first few steps are reasonable.
 
-#### 第三阶段：完整 `go_run`
+#### The third stage: complete `go_run`
 
-前两步都通过后，再执行：
+After passing the first two steps, execute:
 
 ```bash
 conda activate kdc_dev
@@ -446,31 +446,31 @@ source /opt/ros/noetic/setup.bash
 python kuavo_deploy/src/scripts/script.py --task go_run --config configs/deploy/kuavo_env.lmy_go_run.yaml
 ```
 
-该流程会先按 `go.bag` 到起始姿态，再启动 LingBot 推理。
+This process will first press `go.bag` to the starting posture, and then start LingBot inference.
 
-### 9.6 暂停、停止与回零
+### 9.6 Pause, stop and return to zero
 
-头部控制可以通过发布：
+Header control can be issued via:
 
 ```bash
 rostopic pub /robot_head_motion_data kuavo_msgs/robotHeadMotionData "joint_data: [0.0, 27.0]" --once
 ```
 
-`script.py` 启动后会打印 PID，可用下面方式控制：
+`script.py` will print the PID after startup, which can be controlled in the following ways:
 
-暂停或恢复：
+Pause or resume:
 
 ```bash
 kill -USR1 <pid>
 ```
 
-停止：
+Stop:
 
 ```bash
 kill -USR2 <pid>
 ```
 
-如果停止后需要回安全位：
+If you need to return to a safe position after stopping:
 
 ```bash
 conda activate kdc_dev
@@ -478,33 +478,33 @@ source /opt/ros/noetic/setup.bash
 python kuavo_deploy/src/scripts/script.py --task back_to_zero --config configs/deploy/kuavo_env.lmy_go_run.yaml
 ```
 
-建议在第一次真机测试前，先单独验证一次 `back_to_zero`。
+It is recommended to verify `back_to_zero` separately before the first real machine test.
 
-### 9.7 常见问题
+### 9.7 FAQ
 
-- `机械臂初始化失败`
-  - 优先检查 `kuavo-humanoid-sdk` 版本是否和机器人侧一致。
+- `Robotic arm initialization failed`
+  - Prioritize checking whether the version of `kuavo-humanoid-sdk` is consistent with the robot side.
 
-- `LingBot import 失败`
-  - 确认当前环境为 `kdc_dev`，并且该环境里能正常导入 LingBot 相关模块。
+- `LingBot import failed`
+  - Confirm that the current environment is `kdc_dev`, and that LingBot related modules can be imported normally in this environment.
 
-- `缺少 wrist_cam_l`
-  - 当前仓库已兼容只有右腕图的部署场景。
+- `wrist_cam_l is missing`
+  - The current warehouse is compatible with deployment scenarios that only have the right wrist image.
 
-- 模型能启动但动作异常
-  - 优先检查：
+- The model can be started but behaves abnormally
+  - Priority checks:
   - `which_arm: right`
-  - `obs_key_map` 是否对应真机实际话题
-  - `pretrained_path` 是否是正确的单右臂 LingBot checkpoint
-  - `go.bag` 是否适配当前机器人姿态
+  - Whether `obs_key_map` corresponds to actual topics on real machines
+  - Whether `pretrained_path` is the correct single right arm LingBot checkpoint
+  - `go.bag` Whether to adapt to the current robot posture
 
-- `go.bag` 回放正常，但 `run` 异常
-  - 说明轨迹链路没问题，重点排查模型输入、checkpoint 和观测维度。
+- `go.bag` playback is normal, but `run` is abnormal
+  - It indicates that there is no problem with the trajectory link. Focus on checking the model input, checkpoint and observation dimensions.
 
-### 9.8 相关文件
+### 9.8 Related documents
 
-- 部署配置：`configs/deploy/kuavo_env.yaml`
-- 真机脚本：`kuavo_deploy/src/scripts/script.py`
-- 真机推理入口：`kuavo_deploy/src/eval/real_single_test.py`
-- LingBot 部署适配器：`kuavo_deploy/utils/lingbot_adapter.py`
+- Deployment configuration: `configs/deploy/kuavo_env.yaml`
+- Real machine script: `kuavo_deploy/src/scripts/script.py`
+- Real machine reasoning entrance: `kuavo_deploy/src/eval/real_single_test.py`
+- LingBot deployment adapter: `kuavo_deploy/utils/lingbot_adapter.py`
 

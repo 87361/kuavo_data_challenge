@@ -29,20 +29,20 @@ class ObsBuffer:
     ) -> None:
         self.control_signal_manager = ControlSignalManager()
         self.ros_manager = ROSManager()
-        # === 从 KuavoConfig 中提取环境配置 ===
+        #=== Extract environment configuration from KuavoConfig Extract Configuration===
         # env_cfg = config.env
         env_cfg = config
         self.which_arm = env_cfg.which_arm
 
-        # === 观测定义 ===
+        #=== Observation Defn ===
         self.obs_key_map = obs_key_map or env_cfg.obs_key_map or {}
         self.compute_func_map = compute_func_map or {}
 
-        # === 区分订阅型与计算型观测 ===
+        #=== Differentiate Observation Types===
         self.subscribe_keys = {k: v for k, v in self.obs_key_map.items() if v.get("type") != "computed"}
         self.computed_keys  = {k: v for k, v in self.obs_key_map.items() if v.get("type") == "computed"}
 
-        # === 反向依赖索引 ===
+        #=== Reverse Indicing Dependencies ===
         self.source_to_computed = {}
         for comp_key, comp_info in self.computed_keys.items():
             src = comp_info.get("source")
@@ -50,14 +50,14 @@ class ObsBuffer:
                 self.source_to_computed.setdefault(src, []).append(comp_key)
                 log_robot.info(f"Registered computed obs '{comp_key}' depends on '{src}'")
 
-        # === 初始化观测缓存 ===
+        #=== Initialize the observation buffer Init Observation Buffer ===
         self.obs_buffer_size = {k: v["frequency"] for k, v in self.obs_key_map.items()}
         self.obs_buffer_data = {
             k: {"data": deque(maxlen=v["frequency"]), "timestamp": deque(maxlen=v["frequency"])}
             for k, v in self.obs_key_map.items()
         }
 
-        # === ROS topic 对应表 ===
+        #=== ROS topic correspondence table Reference List ===
         self.callback_key_map = {
             '/cam_h/color/image_raw/compressed': self.rgb_callback,
             '/cam_l/color/image_raw/compressed': self.rgb_callback,
@@ -72,12 +72,12 @@ class ObsBuffer:
         }
         self.setup_subscribers()
 
-    # ===== ROS订阅 =====
+    #===== ROS Subscription =====
     def create_callback(self, callback, topic_key, handle):
         return lambda msg: callback(msg, topic_key, handle)
 
     def setup_subscribers(self):
-        """仅订阅来自 ROS 的观测"""
+        """Subscribe to observations only from ROS"""
         msg_type_dict = {"CompressedImage":CompressedImage,
                          "sensorsData":sensorsData,
                          "JointState":JointState,
@@ -98,13 +98,13 @@ class ObsBuffer:
             )
             log_robot.info(f"Subscribed to {topic_name} for key '{topic_key}'")
 
-    # ===== 数据预处理 =====
+    #===== Data Preprocessing =====
     def img_preprocess(self, image):
-        """图像预处理"""
+        """Image preprocessing"""
         return to_tensor(image).unsqueeze(0)
 
     def depth_preprocess(self, depth, depth_range=[0, 1500]):
-        """深度图像预处理"""
+        """Depth image preprocessing"""
         depth_float32 = depth.astype(np.float32)
         depth_float32 = torch.tensor(depth_float32, dtype=torch.float32).clamp(*depth_range).unsqueeze(0)
         max_depth = depth_float32.max()
@@ -112,7 +112,7 @@ class ObsBuffer:
         depth_normalized = (depth_float32 - min_depth) / (max_depth - min_depth + 1e-9)
         return depth_normalized
 
-    # ===== Callback 函数群 =====
+    #===== Callback function group Functions =====
     def rgb_callback(self, msg: CompressedImage, key: str, handle: dict):
         img_arr = np.frombuffer(msg.data, dtype=np.uint8)
         cv_img = cv2.imdecode(img_arr, cv2.IMREAD_COLOR)
@@ -146,9 +146,9 @@ class ObsBuffer:
         joint = msg.joint_data.joint_q
         timestamp = msg.header.stamp.to_sec()
 
-        # FK 计算需要双臂的14个关节（索引12-26）
-        # 计算依赖于此数据源的观测（例如 eef_pose）
-        arm_joints = joint[12:26]  # 提取双臂关节
+        #FK calculation requires 14 joints of both arms (index 12-26)
+        #Compute observations that depend on this data source (e.g. eef_pose)
+        arm_joints = joint[12:26]  #Extract the joints of both arms
         self.compute_dependent_obs(key, arm_joints, timestamp)
 
         slice_value = handle.get("params", {}).get("slice", None)  
@@ -160,7 +160,7 @@ class ObsBuffer:
         # Float64Array ()
         joint = msg.data.position
         slice_value = handle.get("params", {}).get("slice", None)  
-        joint = [x / 100 for slc in slice_value for x in joint[slc[0]:slc[1]]] # 注意缩放
+        joint = [x / 100 for slc in slice_value for x in joint[slc[0]:slc[1]]] #Pay attention to zoom
         # joint = torch.tensor(joint, dtype=torch.float32, device=self.device)
         self._append_data(key, joint, msg.header.stamp.to_sec())
 
@@ -180,7 +180,7 @@ class ObsBuffer:
         # joint = torch.tensor(joint, dtype=torch.float32, device=self.device)
         self._append_data(key, joint, msg.header.stamp.to_sec())
 
-    # ===== 公共方法 =====
+    #===== Public Methods =====
     def _append_data(self, key, data, timestamp):
         self.obs_buffer_data[key]["data"].append(data)
         self.obs_buffer_data[key]["timestamp"].append(timestamp)
@@ -211,11 +211,11 @@ class ObsBuffer:
 
         while not self.obs_buffer_is_ready():
             if not self.control_signal_manager.check_control_signals():
-                log_robot.info("🛑 停止信号已接收，退出")
+                log_robot.info("🛑 Stop signal detected, exiting")
                 sys.exit(1)
 
             now = time.time()
-            # 每隔 1 秒打印一次日志
+            #Print log every 1 second
             if now - last_log_time > 0.2:
                 logs = []
                 for k in progress:
@@ -233,18 +233,18 @@ class ObsBuffer:
     def get_latest_obs(self):
         obs = {}
         for k, buf in self.obs_buffer_data.items():
-            obs[k] = list(buf["data"])[-1]  # 取最新一帧
+            obs[k] = list(buf["data"])[-1]  #Get the latest frame
         return obs
 
     def get_aligned_obs(self, reference_keys=["/cam_h/color/image_raw/compressed"], max_dt=0.01, ratio=1.0):
         """
-        返回各观测时间上对齐的最新帧
-        reference_keys: 以哪些key作为时间参考，默认 None -> 所有 key 最小的最新时间戳
-        max_dt: 最大允许时间偏差（秒），超出则返回 None
+        Returns the latest frame aligned at each observation time
+        reference_keys: Which keys are used as time reference, default None -> the smallest latest timestamp of all keys
+        max_dt: Maximum allowed time deviation (seconds), returns None if exceeded
         """
-        # ===== 获取参考时间戳 =====
+        #===== Get reference timestamp =====
         if reference_keys:
-            # 用指定 key 的最新时间戳
+            #Use the latest timestamp of the specified key
             ref_times = []
             for k in reference_keys:
                 buf = self.obs_buffer_data[k]
@@ -254,9 +254,9 @@ class ObsBuffer:
                 ref_times.append(ts[-1])
             if not ref_times:
                 return None
-            ref_time = min(ref_times)  # 也可以取 min 或 max，根据需要
+            ref_time = min(ref_times)  #You can also take min or max, as needed
         else:
-            # 没有指定 key -> 所有观测的最新 timestamp 的最小值
+            #No key specified -> Minimum value of the latest timestamp of all observations
             last_timestamps = []
             for buf in self.obs_buffer_data.values():
                 if len(buf) == 0:
@@ -267,7 +267,7 @@ class ObsBuffer:
                 return None
             ref_time = np.min(last_timestamps)
 
-        # ===== 对齐各观测 =====
+        #===== Align Observations =====
         aligned_obs = {}
         for k, buf in self.obs_buffer_data.items():
             n = int(len(buf["data"]) * ratio)

@@ -1,57 +1,57 @@
-# 环境配置方案
+#Environment configuration plan
 
-## 安装ROS Noetic（ROS 1），不是ROS 2！
+## Install ROS Noetic (ROS 1), not ROS 2!
 <!-- https://blog.csdn.net/m0_73745340/article/details/135281023 -->
-### 配置安装源
-- 打开终端，键入：
+### Configure installation source
+- Open a terminal and type:
 ```bash
 wget http://fishros.com/install -O fishros && . fishros
 ```
-- 接着会出现一个菜单界面；选择5 一键配置系统源，测试一下哪个系统源最可靠，选择哪个
+- Then a menu interface will appear; select 5 to configure the system source with one click, test which system source is the most reliable, and choose which one
 
-- 测试完后，输入2 来更换系统源并清理第三方源
+- After testing, enter 2 to replace the system source and clean up the third-party source
 
-- 随后选择1 添加ROS/ROS2源
+- Then select 1 to add ROS/ROS2 source
 
-### 鱼香ROS一键安装
-- 再次跑跟以上相同的命令再次打开鱼香ROS的菜单：
+### One-click installation of Yuxiang ROS
+- Run the same command as above again to open the menu of Yuxiang ROS:
 ```bash
 wget http://fishros.com/install -O fishros && . fishros
 ```
-- 这次选择1 一键安装，随后2 不更换源安装
-- 过一会儿后会问要安装的ROS版本，这里选**ROS1 Noetic**，别搞错！随后选桌面版
-随后自动安装过程比较长，注意观察一下有没有报错，以及打开系统资源监视器看看有没有持续的网络、CPU、或其它资源用量。如果长时间终端和系统资源无动静可能需要Ctrl+C取消然后重来
-- 如果运行完成没有报错，ROS Noetic安装成功
+- This time choose 1 for one-click installation, and then 2 for installation without changing the source.
+- After a while, you will be asked which ROS version you want to install. Select **ROS1 Noetic** here, don’t make a mistake! Then select the desktop version
+The subsequent automatic installation process will take a long time. Pay attention to see if there are any errors, and open the system resource monitor to see if there is continued network, CPU, or other resource usage. If there is no activity in the terminal and system resources for a long time, you may need to Ctrl+C to cancel and start again.
+- If no error is reported after the operation is completed, ROS Noetic is successfully installed.
 
-### 测试ROS安装
-安装完成后可以用ROS自带的Turtlesim测试一下ROS是否可正确运行
-- 开Turtlesim之前先启动ros核心：
+### Test ROS installation
+After the installation is complete, you can use Turtlesim that comes with ROS to test whether ROS can run correctly.
+- Start the ros core before opening Turtlesim:
 ```bash
 roscore
 ```
-- 再打开两个终端，分别运行：
+- Open two more terminals and run:
 ```bash
 rosrun turtlesim turtlesim_node
 rosrun turtlesim turtle_teleop_key
 ```
-这个时候有个窗口里面有个小乌龟，另一个窗口可以通过键盘控制该乌龟，这个时候安装就没有问题了！
+At this time, there is a window with a small turtle in it, and another window can control the turtle through the keyboard. At this time, there is no problem with the installation!
 
 ---
-- 把Miniconda的安装脚本下载下来，暂时下载到项目目录里面：
+- Download the Miniconda installation script and temporarily download it to the project directory:
 ```bash  
 #From: https://web.archive.org/web/20231129185127/https://mediawiki.middlebury.edu/CS/Useful_Tools
 wget https://repo.continuum.io/miniconda/Miniconda3-latest-Linux-x86_64.sh
 ```
 
-- 预先下载好的先安装Miniconda应该就在这里，现在执行安装：
+- The pre-downloaded Miniconda installation should be here, now perform the installation:
 ```bash  
 bash Miniconda3-latest-Linux-x86_64.sh
 ```
-- 首先会有个使用条款，按回车打开，继续按使它翻页到最底部，打yes和回车
-- 下面会显示默认目录，默认目录就可以
-- 后面如果再有个Python Path的警告，再次打yes和回车
-- 在以下ab两个方案，创建python环境：
-## a. 重新创建 Conda 环境
+- First there will be a Terms of Use, press Enter to open it, continue to press it to scroll to the bottom, hit yes and press Enter
+- The default directory will be displayed below, the default directory is fine
+- If there is another Python Path warning later, hit yes and press Enter again.
+- In the following ab two scenarios, create a python environment:
+## a. Recreate the Conda environment
 
 * **Create a conda environment (Python 3.10 recommended)**
   ```bash
@@ -73,26 +73,26 @@ bash Miniconda3-latest-Linux-x86_64.sh
   pip install -r requirements_ilcode.txt
   ```
 
-## b. 使用打包好的环境
+## b. Use the packaged environment
 ```bash
-# 还需要kdc_v0.tar.gz的下载链接
-# 或者conda unpack打包好的环境，注意将setup_env.sh脚本和环境压缩包文件kdc_v0.tar.gz放在同一目录下
+# Also need the download link of kdc_v0.tar.gz
+# Or conda unpack the packaged environment. Note that the setup_env.sh script and the environment compressed package file kdc_v0.tar.gz are placed in the same directory.
 ./setup_env.sh
 source ./kdc_v0/bin/activate
 ```
-## 继续安装依赖
+## Continue to install dependencies
 ```bash
 # Install dependencies. This will take a while...
-进入 third_party/lerobot 目录
+Enter the third_party/lerobot directory
 pip install -e ".[aloha, pusht]"
 
 # Uninstall torchcodec 
 pip uninstall torchcodec
 
-进入 kuavo_data_challenge 项目的根目录
+Enter the root directory of the kuavo_data_challenge project
 pip install -e .
 
-# 安装用于通信的kuavo_humanoid_sdk包，参考链接：
+#Install the kuavo_humanoid_sdk package for communication, reference link:
 # https://gitee.com/leju-robot/kuavo-ros-opensource/tree/master/src/kuavo_humanoid_sdk
 
 ```

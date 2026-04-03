@@ -120,14 +120,14 @@ class ConfigEnv:
                 "frequency": info[2],
                 "handle": {"params": {}}
             }
-            # 统一规则化参数处理
+            #Unified regularized parameter processing
             if len(info) == 4 and isinstance(info[3], list):
                 base["handle"]["params"]["resize_wh"] = info[3]
             if len(info) == 5 and isinstance(info[3], list) and isinstance(info[4], list):
                 base["handle"]["params"]["resize_wh"] = info[3]
                 base["handle"]["params"]["depth_range"] = info[4]
 
-            # 特殊键处理
+            #Special key handling
             if key == "joint_q":
                 base["handle"]["params"]["slice"] = self.joint_q_slice
             if key in ["rq2f85", "qiangnao", "leju_claw"]:
@@ -152,7 +152,7 @@ class ConfigEnv:
 @dataclass
 class ConfigInference:
     go_bag_path: str = ""
-    policy_type: str = "diffusion"  # 支持 diffusion, act 等
+    policy_type: str = "diffusion"  #Support diffusion, act, etc.
     pretrained_path: str = ""  # optional absolute/local path override
     eval_episodes: int = 1
     seed: int = 42
@@ -175,7 +175,8 @@ class ConfigInference:
 
     def validate(self):
         if self.policy_type not in ["diffusion", "act", "lingbot"]:
-            # 若将来支持更多策略，请在此扩展
+            #If more strategies are supported in the future, please expand here
+            # Expansion room for future support for other policies
             raise ValueError(f"Unsupported policy_type '{self.policy_type}'")
         if self.device not in ["cuda", "cpu"]:
             raise ValueError("device must be 'cuda' or 'cpu'")
@@ -217,7 +218,7 @@ def load_kuavo_config(config_path: Optional[str] = None) -> KuavoConfig:
         env_cfg: Dict[str, Any] = cfg.get('env', {})
         inf_cfg: Dict[str, Any] = cfg.get('inference', {})
     else:
-        # 自动根据 dataclass 字段划分 env / inference
+        #Automatically divide env / inference according to dataclass field
         env_fields = set(ConfigEnv.__dataclass_fields__.keys())
         inf_fields = set(ConfigInference.__dataclass_fields__.keys())
 

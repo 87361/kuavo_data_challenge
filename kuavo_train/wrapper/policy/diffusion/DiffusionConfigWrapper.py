@@ -152,10 +152,10 @@ class CustomDiffusionConfigWrapper(DiffusionConfig):
         revision: str | None = None,
         **policy_kwargs,
     ) -> T:
-        # 用父类类型调用 from_pretrained，触发 Choice 机制识别子类
-        parent_cls = PreTrainedConfig  # 或者直接 DiffusionConfig
+        #Call from_pretrained with the parent class type to trigger the Choice mechanism to identify subclasses
+        parent_cls = PreTrainedConfig  #Or directly DiffusionConfig
 
-        # 调用父类的 from_pretrained，注意传入所有参数和额外参数
+        #Call from_pretrained of the parent class, pay attention to passing in all parameters and extra parameters
         return parent_cls.from_pretrained(
             pretrained_name_or_path,
             force_download=force_download,

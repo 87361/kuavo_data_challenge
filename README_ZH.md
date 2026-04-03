@@ -1,62 +1,62 @@
 # 🚀 **Kuavo Data Challenge**
 
 <p align="right">
-  <a href="README_ZH.md"><b>中文</b></a> |
+  <a href="README_ZH.md"><b>Chinese</b></a> |
   <a href="README.md">English</a>
 </p>
 
-[![leju](https://img.shields.io/badge/乐聚智能-blue)](https://www.lejurobot.com/zh)
-[![tong](https://img.shields.io/badge/北京通用人工智能研究院-red)](https://www.bigai.ai/)
+[![leju](https://img.shields.io/badge/Leju Intelligent-blue)](https://www.lejurobot.com/zh)
+[![tong](https://img.shields.io/badge/Beijing Institute of General Artificial Intelligence-red)](https://www.bigai.ai/)
 
 ---
 
-## 🌟 项目简介
-本仓库基于 [Lerobot](https://github.com/huggingface/lerobot) 开发，结合乐聚 Kuavo（夸父）机器人，提供 **数据格式转换**（rosbag → parquet）、**模仿学习（IL）训练**、**仿真器测试**以及**真机部署验证**的完整示例代码。
+## 🌟Project Introduction
+This warehouse is developed based on [Lerobot](https://github.com/huggingface/lerobot) and combined with Leju Kuavo robot to provide complete sample code for **data format conversion** (rosbag → parquet), **imitation learning (IL) training**, **emulator testing** and **real machine deployment verification**.
  
 
 ---
 
-## ✨ 核心功能
-- 数据格式转换模块（rosbag → Lerobot parquet）  
-- IL 模型训练框架 (diffusion policy, ACT)
-- Mujoco 模拟器支持  
-- 真机验证与部署  
+## ✨ Core Functions
+- Data format conversion module (rosbag → Lerobot parquet)
+- IL model training framework (diffusion policy, ACT)
+- Mujoco emulator support
+- Real machine verification and deployment
 
-⚠️ 注意：本示例代码尚未支持末端控制，目前只支持关节角控制！
-
----
-
-## ♻️ 环境要求
-- **系统**：推荐 Ubuntu 20.04（22.04 / 24.04 建议使用 Docker 容器运行）  
-- **Python**：推荐 Python 3.10  
-- **ROS**：ROS Noetic + Kuavo Robot ROS 补丁（支持 Docker 内安装）  
-- **依赖**：Docker、NVIDIA CUDA Toolkit（如需 GPU 加速）  
+⚠️ Note: This sample code does not yet support end control, currently only supports joint angle control!
 
 ---
 
-## 📦 安装指南
+## ♻️ Environmental requirements
+- **System**: Ubuntu 20.04 recommended (22.04 / 24.04 recommended to run with Docker container)
+- **Python**: Python 3.10 recommended
+- **ROS**: ROS Noetic + Kuavo Robot ROS patch (supports installation within Docker)
+- **Dependencies**: Docker, NVIDIA CUDA Toolkit (if GPU acceleration is required)
 
-### 1. 操作系统环境配置
-推荐 **Ubuntu 20.04 + NVIDIA CUDA Toolkit + Docker**。  
+---
+
+## 📦 Installation Guide
+
+### 1. Operating system environment configuration
+Recommended **Ubuntu 20.04 + NVIDIA CUDA Toolkit + Docker**.
 <details>
-<summary>详细步骤（展开查看），仅供参考</summary>
+<summary>Detailed steps (expand to view), for reference only</summary>
 
-#### a. 安装操作系统与 NVIDIA 驱动
+#### a. Install operating system and NVIDIA driver
 ```bash
 sudo apt update
 sudo apt upgrade -y
 ubuntu-drivers devices
-# 测试通过版本为 535，可尝试更新版本（请勿使用 server 分支）
+# The tested version is 535, you can try to update the version (do not use the server branch)
 sudo apt install nvidia-driver-535
-# 重启计算机
+# Restart the computer
 sudo reboot
-# 验证驱动
+# Verify driver
 nvidia-smi
 ```
 
-#### b. 安装 NVIDIA Container Toolkit
+#### b. Install NVIDIA Container Toolkit
 
-在docker镜像中使用nvidia-smi加速时，需要加载nvidia runtime 库，因此需要安装NVIDIA Container Toolkit
+When using nvidia-smi acceleration in a docker image, the nvidia runtime library needs to be loaded, so the NVIDIA Container Toolkit needs to be installed.
 
 ```bash
 sudo apt install curl
@@ -67,63 +67,63 @@ export NVIDIA_CONTAINER_TOOLKIT_VERSION=1.17.8-1 && sudo apt-get install -y nvid
 ```
 
 
-#### c. 安装 Docker
+#### c. Install Docker
 
 ```bash
 sudo apt update
 sudo apt install git
 sudo apt install docker.io
-# 配置docker中的 NVIDIA Runtime
+# Configure NVIDIA Runtime in docker
 nvidia-ctk
 sudo nvidia-ctk runtime configure --runtime=docker
 sudo systemctl restart docker
 sudo docker info | grep -i runtime
-# 输出中应包含 "nvidia" Runtime
+# The output should contain "nvidia" Runtime
 ```
 
 </details>
 
 ---
 
-### 2. ROS 环境配置
+### 2. ROS environment configuration
 
-kuavo mujoco 仿真与真机运行均基于 **ROS Noetic**环境，由于真机kuavo机器人是ubuntu20.04 + ROS Noetic（非docker），因此推荐直接安装 ROS Noetic，若因ubuntu版本较高无法安装 ROS Noetic，可使用docker。
+Both the simulation and real-machine operation of kuavo mujoco are based on the **ROS Noetic** environment. Since the real-machine kuavo robot is ubuntu20.04 + ROS Noetic (non-docker), it is recommended to install ROS Noetic directly. If you cannot install ROS Noetic because the ubuntu version is higher, you can use docker.
 
 <details>
-<summary>a. 系统直接安装 ROS Noetic（<b>推荐</b>）</summary>
+<summary>a. Install ROS Noetic directly on the system (<b>recommended</b>)</summary>
 
-* 官方指南：[ROS Noetic 安装](http://wiki.ros.org/noetic/Installation/Ubuntu)
-* 国内加速源推荐：[小鱼ROS](https://fishros.org.cn/forum/topic/20/)
+* Official guide: [ROS Noetic Installation](http://wiki.ros.org/noetic/Installation/Ubuntu)
+* Recommended domestic acceleration source: [FishROS](https://fishros.org.cn/forum/topic/20/)
 
-安装示例：
+Installation example:
 
 ```bash
 wget http://fishros.com/install -O fishros && . fishros
-# 菜单选择：5 配置系统源 → 2 更换源并清理第三方源 → 1 添加ROS源
+# Menu selection: 5 Configure system source → 2 Change source and clean up third-party source → 1 Add ROS source
 wget http://fishros.com/install -O fishros && . fishros
-# 菜单选择：1 一键安装 → 2 不更换源安装 → 选择 ROS1 Noetic 桌面版
+# Menu selection: 1 One-click installation → 2 Installation without changing the source → Select ROS1 Noetic desktop version
 ```
 
-测试 ROS 安装：
+Test ROS installation:
 
 ```bash
-roscore  # 新建终端
-rosrun turtlesim turtlesim_node  # 新建终端
-rosrun turtlesim turtle_teleop_key  # 新建终端
+roscore # Create a new terminal
+rosrun turtlesim turtlesim_node # Create a new terminal
+rosrun turtlesim turtle_teleop_key # Create a new terminal
 ```
 
 </details>
 
 <details>
-<summary>b. 使用 Docker 安装 ROS Noetic</summary>
+<summary>b. Install ROS Noetic using Docker</summary>
 
-- 首先最好是换个源：
+- First it is best to change the source:
 
 ```bash
 sudo vim /etc/docker/daemon.json
 ```
 
-- 然后在这个json文件中写入一些镜像源：
+- Then write some mirror sources in this json file:
 
 ```json
 {
@@ -140,19 +140,19 @@ sudo vim /etc/docker/daemon.json
 }
 ```
 
-- 然后保存文件并退出后，重启docker服务：
+- Then save the file and exit, restart the docker service:
 
 ```shell
 sudo systemctl daemon-reload && sudo systemctl restart docker
 ```
 
-- 现在开始创建镜像，首先建立Dockerfile：
+- Now start creating the image, first create the Dockerfile:
 ```shell
 mkdir /path/to/save/docker/ros/image
 cd /path/to/save/docker/ros/image
 vim Dockerfile
 ```
-然后在Dockerfile文件中写入如下内容：
+Then write the following content in the Dockerfile:
 
 ```Dockerfile
 FROM ubuntu:20.04
@@ -166,14 +166,14 @@ RUN apt-get update && apt-get install -y locales tzdata gnupg lsb-release
 RUN locale-gen en_US.UTF-8
 ENV LANG=en_US.UTF-8 LANGUAGE=en_US:en LC_ALL=en_US.UTF-8
 
-# 设置ROS的debian源
+# Set the debian source of ROS
 RUN sh -c 'echo "deb http://packages.ros.org/ros/ubuntu $(lsb_release -sc) main" > /etc/apt/sources.list.d/ros-latest.list'
 
-# 添加ROS的Keys
+# Add ROS Keys
 RUN apt-key adv --keyserver 'hkp://keyserver.ubuntu.com:80' --recv-key C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654
 
-# 安装ROS Noetic
-# 设置键盘布局为 Chinese
+# Install ROS Noetic
+#Set the keyboard layout to Chinese
 RUN apt-get update && \
     apt-get install -y keyboard-configuration apt-utils && \
     echo 'keyboard-configuration keyboard-configuration/layoutcode string cn' | debconf-set-selections && \
@@ -183,58 +183,58 @@ RUN apt-get update && \
     apt-get install -y python3-rosdep python3-rosinstall python3-rosinstall-generator python3-wstool build-essential && \
     rm -rf /var/lib/apt/lists/*
 
-# 初始化rosdep
+#Initialize rosdep
 RUN rosdep init
 ```
-写入完毕后保存退出。执行ubuntu20.04 + ROS Noetic镜像的构建：
+Save and exit after writing. Execute the build of ubuntu20.04 + ROS Noetic image:
 
 ```shell
 sudo docker build -t ubt2004_ros_noetic .
 ```
 
-构建完成后进入镜像即可，初次启动容器加载镜像：
+After the build is completed, just enter the image and start the container for the first time to load the image:
 
 ```shell
 sudo docker run -it --name ubuntu_ros_container ubt2004_ros_noetic /bin/bash
-# 或 GPU 启动（推荐）
+# or GPU startup (recommended)
 sudo docker run -it --gpus all --runtime nvidia --name ubuntu_ros_container ubt2004_ros_noetic /bin/bash
-# 可选，挂载本地目录路径等
+# Optional, mount local directory path, etc.
 # sudo docker run -it --gpus all --runtime nvidia --name ubuntu_ros_container -v /path/to/your/code:/root/code ubt2004_ros_noetic /bin/bash
 ```
 
-之后每次加载：
+Each subsequent load:
 ```shell
 sudo docker start ubuntu_ros_container
 sudo docker exec -it ubuntu_ros_container /bin/bash
 ```
 
-进入镜像后，初始化ros环境变量，然后启动roscore
+After entering the image, initialize the ros environment variable and then start roscore
 
 ```shell
 source /opt/ros/noetic/setup.bash
 roscore
 ```
 
-无误的话，ubuntu20.04 + ros noetic的docker配置方式就结束了。
+If it is correct, the docker configuration method of ubuntu20.04 + ros noetic is over.
 
 </details>
 
 <br>
-⚠️ 警告：如果上述中ROS使用的是docker环境，下方后续的代码可能需要在容器里面运行，如有问题，请核对当前是否在容器内！
+⚠️ Warning: If the above ROS uses a docker environment, the subsequent code below may need to be run in the container. If there is any problem, please check whether it is currently in the container!
 
 ---
 
-### 3. 克隆代码
+### 3. Clone code
 
 ```bash
 # SSH
 git clone --depth=1 git@github.com:LejuRobotics/kuavo_data_challenge.git
-# 或者
+# or
 # HTTPS
 git clone --depth=1 https://github.com/LejuRobotics/kuavo_data_challenge.git
 ```
 
-更新third_party下的lerobot子模块：
+Update the lerobot submodule under third_party:
 
 ```bash
 cd kuavo_data_challenge
@@ -244,16 +244,16 @@ git submodule update --recursive
 
 ---
 
-### 4. Python 环境配置
+### 4. Python environment configuration
 
-使用 conda （推荐）或 python venv 创建虚拟环境（推荐 python 3.10）：
+Create a virtual environment using conda (recommended) or python venv (python 3.10 recommended):
 
 ```bash
 conda create -n kdc python=3.10
 conda activate kdc
 ```
 
-或：先安装python3.10，再使用venv创建虚拟环境
+Or: install python3.10 first, and then use venv to create a virtual environment
 
 ```bash
 sudo apt update
@@ -266,46 +266,46 @@ python3.10 -m venv kdc
 source kdc/bin/activate
 ```
 
-查看和确保安装正确：
+Check to make sure the installation is correct:
 ```shell
-python  # 查看python版本，看到确认输出为3.10.xxx（通常是3.10.18）
-# 输出示例：
+python # Check the python version and see that the confirmation output is 3.10.xxx (usually 3.10.18)
+# Output example:
 # Python 3.10.18 (main, Jun  5 2025, 13:14:17) [GCC 11.2.0] on linux
 # Type "help", "copyright", "credits" or "license" for more information.
 # >>> 
 
-pip --version # 查看pip对应的版本，看到确认输出为3.10的pip
-# 输出示例：pip 25.1 from /path/to/your/env/python3.10/site-packages/pip (python 3.10)
+pip --version # Check the version corresponding to pip and see the pip that confirms the output is 3.10
+# Output example: pip 25.1 from /path/to/your/env/python3.10/site-packages/pip (python 3.10)
 ```
 
 
-安装依赖：
+Install dependencies:
 
 ```bash
-pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple  # 建议首先换源，能加快下载安装速度
+pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple # It is recommended to change the source first to speed up download and installation.
 
-pip install -r requirements_ilcode.txt   # 无需ROS Noetic，但只能使用kuavo_train模仿学习训练代码，kuavo_data（数转）及 kuavo_deploy（部署代码）均依赖ROS
-# 或
-pip install -r requirements_total.txt    # 需确保 ROS Noetic 已安装 (推荐)
+pip install -r requirements_ilcode.txt # No need for ROS Noetic, but you can only use kuavo_train to imitate the learning training code. kuavo_data (digital transfer) and kuavo_deploy (deployment code) both rely on ROS
+# or
+pip install -r requirements_total.txt # Make sure ROS Noetic is installed (recommended)
 ```
 
-如果运行时报ffmpeg或torchcodec的错：
+If you get an error from ffmpeg or torchcodec when running:
 
 ```bash
 conda install ffmpeg==6.1.1
 
-# 或
+# or
 
 pip uninstall torchcodec
 ```
 
 ---
 
-## 📨 使用方法
+## 📨 How to use
 
-### 1. 数据格式转换
+### 1. Data format conversion
 
-将 Kuavo 原生 rosbag 数据转换为 Lerobot 框架可用的 parquet 格式：
+Convert Kuavo native rosbag data to parquet format usable by Lerobot framework:
 
 ```bash
 python kuavo_data/CvtRosbag2Lerobot.py \
@@ -315,17 +315,17 @@ python kuavo_data/CvtRosbag2Lerobot.py \
   rosbag.lerobot_dir=/path/to/lerobot_data
 ```
 
-说明：
+Description:
 
-* `rosbag.rosbag_dir`：原始 rosbag 数据路径
-* `rosbag.lerobot_dir`：转换后的lerobot-parquet 数据保存路径，通常会在此目录下创建一个名为lerobot的子文件夹
-* `configs/data/KuavoRosbag2Lerobot.yaml`：请查看并根据需要选择启用的相机及是否使用深度图像等
+* `rosbag.rosbag_dir`: original rosbag data path
+* `rosbag.lerobot_dir`: The converted lerobot-parquet data saving path, usually a subfolder named lerobot will be created in this directory
+* `configs/data/KuavoRosbag2Lerobot.yaml`: Please view and select the enabled camera and whether to use depth images as needed
 
 ---
 
-### 2. 模仿学习训练
+### 2. Imitation learning training
 
-使用转换好的数据进行模仿学习训练：
+Use the converted data for imitation learning training:
 
 ```bash
 python kuavo_train/train_policy.py \
@@ -338,123 +338,123 @@ python kuavo_train/train_policy.py \
   policy_name=diffusion
 ```
 
-说明：
+Description:
 
-* `task`：自定义，任务名称（最好与数转中的task定义对应），如`pick and place`
-* `method`：自定义，方法名，用于区分不同的训练，如`diffusion_bs128_usedepth_nofuse`等
-* `root`：训练数据的本地路径，注意加上lerobot，与1中的数转保存路径需要对应，为：`/path/to/lerobot_data/lerobot`
-* `training.batch_size`：批大小，可根据 GPU 显存调整
-* `policy_name`：使用的策略，用于策略实例化的，目前支持`diffusion`和`act`
-* 其他参数可详见yaml文件说明，推荐直接修改yaml文件，避免命令行输入错误
+* `task`: customized, task name (preferably corresponding to the task definition in the number transfer), such as `pick and place`
+* `method`: custom, method name, used to distinguish different trainings, such as `diffusion_bs128_usedepth_nofuse`, etc.
+* `root`: The local path of the training data. Note that lerobot is added. It needs to correspond to the data transfer saving path in 1, which is: `/path/to/lerobot_data/lerobot`
+* `training.batch_size`: Batch size, can be adjusted according to GPU memory
+* `policy_name`: The policy used, used for policy instantiation, currently supports `diffusion` and `act`
+* For other parameters, please refer to the yaml file description. It is recommended to modify the yaml file directly to avoid command line input errors.
 
 ---
 
-### 3. 仿真器测试
+### 3. Emulator test
 
-完成训练后可启动mujoco仿真器并调用部署代码并进行评估：
+After completing the training, you can start the mujoco emulator and call the deployment code and evaluate:
 
-a. 启动mujoco仿真器：详情请见[readme for simulator](https://github.com/LejuRobotics/kuavo-ros-opensource/blob/opensource/kuavo-data-challenge/readme.md)
+a. Start the mujoco simulator: For details, please see [readme for simulator](https://github.com/LejuRobotics/kuavo-ros-opensource/blob/opensource/kuavo-data-challenge/readme.md)
 
-b. 调用部署代码
+b. Call deployment code
 
-- 配置文件位于 `./configs/deploy/`：
-  * `kuavo_sim_env.yaml`：仿真器运行配置
-  * `kuavo_real_env.yaml`：真机运行配置
+- Configuration files are located at `./configs/deploy/`:
+  * `kuavo_sim_env.yaml`: emulator running configuration
+  * `kuavo_real_env.yaml`: real machine running configuration
 
 
-- 请查看yaml文件，并修改下面的`# inference configs`相关的参数（模型加载）等。
+- Please check the yaml file and modify the following `# inference configs` related parameters (model loading), etc.
 
-- 启动自动化推理部署：
+- Start automated inference deployment:
   ```bash
   bash kuavo_deploy/eval_kuavo.sh
   ```
-- 按照指引操作，一般最后请选择`"8. 仿真中自动测试模型，执行eval_episodes次:`，这步操作详见[kuavo deploy](kuavo_deploy/readme/inference.md)
+- Follow the instructions. Generally, please select `" at the end. 8. Automatically test the model in simulation and execute eval_episodes times:`. For details on this step, please see [kuavo deploy](kuavo_deploy/readme/inference.md)
 ---
 
 
 
-### 4. 真机测试
+### 4. Real machine test
 
-步骤同3中a部分，更换指定配置文件为 `kuavo_real_env.yaml`，即可在真机上部署测试。
+The steps are the same as part a in 3. Change the specified configuration file to `kuavo_real_env.yaml` to deploy the test on the real machine.
 
 ---
 
-## 📡 ROS 话题说明
+## 📡 ROS topic description
 
-**仿真环境：**
+**Simulation environment:**
 
-| 话题名                                           | 功能说明          |
+| Topic name | Function description |
 | --------------------------------------------- | ------------- |
-| `/cam_h/color/image_raw/compressed`           | 上方相机 RGB 彩色图像 |
-| `/cam_h/depth/image_raw/compressedDepth`      | 上方相机深度图       |
-| `/cam_l/color/image_raw/compressed`           | 左侧相机 RGB 彩色图像 |
-| `/cam_l/depth/image_rect_raw/compressedDepth` | 左侧相机深度图       |
-| `/cam_r/color/image_raw/compressed`           | 右侧相机 RGB 彩色图像 |
-| `/cam_r/depth/image_rect_raw/compressedDepth` | 右侧相机深度图       |
-| `/gripper/command`                            | 仿真rq2f85夹爪控制命令    |
-| `/gripper/state`                              | 仿真rq2f85夹爪当前状态   |
-| `/joint_cmd`                                  | 所有关节的控制指令，包含腿部  |
-| `/kuavo_arm_traj`                             | 机器人机械臂轨迹控制 |
-| `/sensors_data_raw`                           | 所有传感器原始数据 |
+| `/cam_h/color/image_raw/compressed` | Upper camera RGB color image |
+| `/cam_h/depth/image_raw/compressedDepth` | Top camera depth map |
+| `/cam_l/color/image_raw/compressed` | Left camera RGB color image |
+| `/cam_l/depth/image_rect_raw/compressedDepth` | Left camera depth map |
+| `/cam_r/color/image_raw/compressed` | Right camera RGB color image |
+| `/cam_r/depth/image_rect_raw/compressedDepth` | Right camera depth map |
+| `/gripper/command` | Simulation rq2f85 gripper control command |
+| `/gripper/state` | Current state of simulated rq2f85 gripper |
+| `/joint_cmd` | Control instructions for all joints, including legs |
+| `/kuavo_arm_traj` | Robot manipulator trajectory control |
+| `/sensors_data_raw` | All sensor raw data |
 
-**真机环境：**
+**Real machine environment:**
 
-| 话题名                                           | 功能说明          |
+| Topic name | Function description |
 | --------------------------------------------- | ------------- |
-| `/cam_h/color/image_raw/compressed`           | 上方相机 RGB 彩色图像 |
-| `/cam_h/depth/image_raw/compressedDepth`      | 上方相机深度图，realsense  |
-| `/cam_l/color/image_raw/compressed`           | 左侧相机 RGB 彩色图像 |
-| `/cam_l/depth/image_rect_raw/compressedDepth` | 左侧相机深度图，realsense       |
-| `/cam_r/color/image_raw/compressed`           | 右侧相机 RGB 彩色图像 |
-| `/cam_r/depth/image_rect_raw/compressedDepth` | 右侧相机深度图，realsense       |
-| `/control_robot_hand_position`                | 灵巧手关节角控制指令      |
-| `/dexhand/state`                              | 灵巧手当前关节角状态        |
-| `/leju_claw_state`                            | 乐聚夹爪当前关节角状态     |
-| `/leju_claw_command`                          | 乐聚夹爪关节角控制指令     |
-| `/joint_cmd`                                  | 所有关节的控制指令，包含腿部    |
-| `/kuavo_arm_traj`                             | 机器人机械臂轨迹控制       |
-| `/sensors_data_raw`                           | 所有传感器原始数据 |
+| `/cam_h/color/image_raw/compressed` | Upper camera RGB color image |
+| `/cam_h/depth/image_raw/compressedDepth` | Top camera depth map, realsense |
+| `/cam_l/color/image_raw/compressed` | Left camera RGB color image |
+| `/cam_l/depth/image_rect_raw/compressedDepth` | Left camera depth map, realsense |
+| `/cam_r/color/image_raw/compressed` | Right camera RGB color image |
+| `/cam_r/depth/image_rect_raw/compressedDepth` | Right camera depth map, realsense |
+| `/control_robot_hand_position` | Dexterous hand joint angle control command |
+| `/dexhand/state` | The current joint angle state of the dexterous hand |
+| `/leju_claw_state` | Current joint angle status of Leju clamper |
+| `/leju_claw_command` | Leju clamp joint angle control command |
+| `/joint_cmd` | Control instructions for all joints, including legs |
+| `/kuavo_arm_traj` | Robot manipulator trajectory control |
+| `/sensors_data_raw` | All sensor raw data |
 
 
 
 ---
 
-## 📁 代码输出结构
+## 📁 Code output structure
 
 ```
 outputs/
-├── train/<task>/<method>/run_<timestamp>/   # 训练模型与参数
-├── eval/<task>/<method>/run_<timestamp>/    # 测试日志与视频
+├── train/<task>/<method>/run_<timestamp>/ # Training model and parameters
+├── eval/<task>/<method>/run_<timestamp>/ # Test log and video
 ```
 
 ---
 
-## 📂 核心代码结构
+## 📂 Core code structure
 
 ```
 KUAVO_DATA_CHALLENGE/
-├── configs/                # 配置文件
-├── kuavo_data/             # 数据处理转换模块
-├── kuavo_deploy/           # 部署脚本（模拟器/真机）
-├── kuavo_train/            # 模仿学习训练代码
-├── lerobot_patches/        # Lerobot 运行补丁
-├── outputs/                # 模型与结果
-├── third_party/            # Lerobot 依赖
-└── requirements_xxx.txt    # 依赖列表
-└── README.md               # 说明文档
+├── configs/ # Configuration file
+├── kuavo_data/ # Data processing conversion module
+├── kuavo_deploy/ # Deployment script (simulator/real machine)
+├── kuavo_train/ # Imitation learning training code
+├── lerobot_patches/ # Lerobot running patches
+├── outputs/ # Model and results
+├── third_party/ # Lerobot dependency
+└── requirements_xxx.txt # Dependency list
+└── README.md # Documentation
 ```
 
 ---
 
-## 🐒 关于 `lerobot_patches`
+## 🐒 About `lerobot_patches`
 
-该目录包含对 **Lerobot** 的兼容性补丁，主要功能包括：
+This directory contains compatibility patches for **Lerobot**. Its main features include:
 
-* 扩展 `FeatureType`，支持 RGB 与 Depth 图像
-* 定制 `compute_episode_stats` 与 `create_stats_buffers`，用于图像与深度数据的统计量统计，min，max，mean，std等
-* 修改 `dataset_to_policy_features`，确保 Kuavo RGB + Depth的FeatureType正确映射
+* Extend `FeatureType` to support RGB and Depth images
+* Customize `compute_episode_stats` and `create_stats_buffers`, used for statistics of image and depth data, min, max, mean, std, etc.
+* Modify `dataset_to_policy_features` to ensure that the FeatureType of Kuavo RGB + Depth is correctly mapped
 
-需要使用基于lerobot的定制设计如深度数据、新的FeatureType、归一化方式等，可自行添加，并在使用时在入口脚本（如kuavo_train/train_policy.py等训练文件代码）的最开头一行引入：
+If you need to use customized designs based on lerobot, such as depth data, new FeatureType, normalization methods, etc., you can add them yourself and introduce them in the first line of the entry script (such as kuavo_train/train_policy.py and other training file codes) when using:
 
 ```python
 import lerobot_patches.custom_patches  # Ensure custom patches are applied, DON'T REMOVE THIS LINE!
@@ -462,9 +462,9 @@ import lerobot_patches.custom_patches  # Ensure custom patches are applied, DON'
 
 ---
 
-## 🙏 致谢
+## 🙏 Acknowledgments
 
-本项目基于 [**Lerobot**](https://github.com/huggingface/lerobot) 扩展而成。
-感谢 HuggingFace 团队开发的开源机器人学习框架，为本项目提供了重要基础。
+This project is based on [**Lerobot**](https://github.com/huggingface/lerobot).
+Thanks to the HuggingFace team for developing the open source robot learning framework, which provides an important foundation for this project.
 
 

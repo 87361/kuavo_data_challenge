@@ -24,7 +24,7 @@ class ROSHandler:
         ]
 
     def _extract_data(self, msg, topic_name):
-        """根据话题类型提取关键数据"""
+        """Extract key data based on topic type"""
         data = {}
         try:
             msg_dict = message_converter.convert_ros_message_to_dictionary(msg)
@@ -44,14 +44,14 @@ class ROSHandler:
         return data
 
     def _get_timestamp(self, msg):
-        """从消息头获取时间戳，回退到当前时间"""
+        """Get the timestamp from the message header and roll back to the current time"""
         try:
             return msg.header.stamp.to_sec()
         except AttributeError:
             return rospy.get_time()
 
     def _generic_callback(self, msg, topic_name):
-        """统一消息回调处理"""
+        """Unified message callback processing"""
         try:
             message = {
                 'type': topic_name,
@@ -64,14 +64,14 @@ class ROSHandler:
             rospy.logerr(f"Message processing failed for {topic_name}: {str(e)}")
 
     def run(self):
-        """启动ROS节点并订阅所有配置的话题"""
+        """Start the ROS node and subscribe to all configured topics"""
         rospy.init_node('ros_handler', anonymous=True)
         
-        # 动态创建消息类型映射
+        #Dynamically create message type mappings
         msg_type_mapping = {topic: msg_type for topic, msg_type in self.topics_config}
         
         for topic_name, _ in self.topics_config:
-            # 使用闭包正确捕获当前topic_name的值
+            #Use closures to correctly capture the value of the current topic_name
             rospy.Subscriber(
                 topic_name,
                 msg_type_mapping[topic_name],
@@ -85,7 +85,7 @@ def start_ros_handler(queue):
 
 
 def get_ros_queue(maxsize=10):
-    """初始化ROS消息队列"""
+    """Initialize ROS message queue"""
     queue = Queue(maxsize=maxsize)
     p = Process(target=start_ros_handler, args=(queue,))
     p.start()

@@ -1,13 +1,13 @@
 """
-分块流式处理rosbag模块
+Chunked streaming rosbag module
 
-核心思路（参考Diffusion Policy的按需读取方式）：
-1. 第一遍扫描：只读取时间戳，确定主时间线（不加载图像数据，内存占用极小）
-2. 第二遍扫描：按时间窗口分块读取，边读取边对齐边写入dataset
+Core idea (refer to the on-demand reading method of Diffusion Policy):
+1. The first scan: only reads the timestamp and determines the main timeline (no image data is loaded, and the memory usage is very small)
+2. The second scan: read in blocks according to the time window, and write the dataset while aligning while reading.
 
-与原始方法的区别：
-- 原始：一次性加载所有数据到内存 → 对齐 → 写入dataset（内存峰值巨大）
-- 新方法：分块读取 → 即时对齐 → 即时写入 → 释放内存（内存占用可控）
+Differences from the original method:
+- Raw: Load all data into memory at once→ Alignment→ Writing to dataset (memory peak is huge)
+- New method: chunked reading→ Instant alignment→ instant write→ Release memory (memory usage is controllable)
 """
 
 import numpy as np
@@ -22,11 +22,11 @@ logger = logging.getLogger(__name__)
 
 class ChunkedRosbagProcessor:
     """
-    分块流式处理rosbag，实现边读取边对齐边处理
+    Blocked streaming processing of rosbag enables reading, alignment and processing at the same time
     
-    工作流程：
-    1. scan_timestamps(): 第一遍扫描，只读取时间戳（内存占用极小）
-    2. process_chunks(): 第二遍扫描，按时间窗口分块处理
+    Workflow:
+    1. scan_timestamps(): The first scan only reads the timestamp (minimum memory usage)
+    2. process_chunks(): The second scan is performed in blocks according to time windows.
     """
     
     def __init__(self, msg_processer, topic_process_map: dict, 
@@ -43,18 +43,18 @@ class ChunkedRosbagProcessor:
     
     def scan_timestamps_only(self, bag_file: str) -> Tuple[str, List[float], Dict[str, List[float]]]:
         """
-        第一遍扫描：只读取时间戳，不加载数据
+        First pass of scan: only reads timestamps, does not load data
         
-        内存占用：只有时间戳列表（几MB），不包含图像数据
+        Memory footprint: only timestamp list (a few MB), no image data
         
         Returns:
-            main_timeline: 主时间线话题key
-            main_timestamps: 对齐后的主时间戳序列（降采样后）
-            all_timestamps: 每个话题的原始时间戳列表
+            main_timeline: Main timeline topic key
+            main_timestamps: Aligned primary timestamp sequence (after downsampling)
+            all_timestamps: List of original timestamps for each topic
         """
         bag = self._load_bag(bag_file)
         
-        # 统计每个话题的时间戳（不加载消息内容）
+        #Count the timestamp of each topic (without loading message content)
         all_timestamps = defaultdict(list)
         topic_to_key = {}
         for k, v in self._topic_process_map.items():
@@ -65,7 +65,7 @@ class ChunkedRosbagProcessor:
         
         logger.info(f"[Phase 1] Scanning timestamps from {bag_file}...")
         
-        # 一次遍历，收集所有话题的时间戳
+        #Traverse once and collect the timestamps of all topics
         all_topics = [v["topic"] for v in self._topic_process_map.values()]
         for topic, msg, t in bag.read_messages(topics=all_topics):
             keys = topic_to_key.get(topic)
@@ -76,7 +76,7 @@ class ChunkedRosbagProcessor:
         
         bag.close()                           
         
-        # 确定主时间线：消息最多的相机
+        #Determine the main timeline: the camera with the most messages
         camera_counts = {k: len(all_timestamps.get(k, [])) for k in self.camera_names}
         if not any(camera_counts.values()):
             raise ValueError("No camera data found in rosbag")
@@ -86,29 +86,29 @@ class ChunkedRosbagProcessor:
             main_timeline = self.main_timeline
         logger.info(f"Main timeline: {main_timeline} ({camera_counts[main_timeline]} frames)")
         
-        # 生成对齐后的主时间戳序列
+        #Generate an aligned primary timestamp sequence
         jump = self.main_timeline_fps // self.train_hz
         raw_timestamps = all_timestamps[main_timeline]
 
         if len(raw_timestamps) < 2 * self.sample_drop + 1:
             raise ValueError(f"Not enough frames: {len(raw_timestamps)}")
 
-        # 丢弃首尾帧，降采样
-        # 注意：当 sample_drop 为 0 时，不能使用 [self.sample_drop:-self.sample_drop]，
-        # 因为 [-0] 等价于 [0]，会导致切片结果为空。
+        #Discard the first and last frames and downsample
+        #Note: When sample_drop is 0, [self.sample_drop:-self.sample_drop] cannot be used,
+        #Because [-0] is equivalent to [0], the slice result will be empty.
         if self.sample_drop > 0:
             main_timestamps = raw_timestamps[self.sample_drop:-self.sample_drop][::jump]
         else:
             main_timestamps = raw_timestamps[::jump]
         
-        # 取所有话题中“最早结束”的时间
+        #Get the "earliest end" time among all topics
         min_end = min(
             ts_list[-1]
             for ts_list in all_timestamps.values()
             if len(ts_list) > 0
         )
 
-        # 裁剪主时间线，只保留所有话题都还存在数据的时间点
+        #Cut the main timeline to only keep the time point when all topics still have data
         before_len = len(main_timestamps)
         main_timestamps = [t for t in main_timestamps if t < min_end]
         after_len = len(main_timestamps)
@@ -134,36 +134,36 @@ class ChunkedRosbagProcessor:
         save_callback: Optional[Callable[[], None]] = None
     ) -> int:
         """
-        第二遍扫描：按时间窗口分块处理
+        Second pass of scanning: processing in blocks according to time window
         
-        策略：
-        1. 将main_timestamps分成多个chunk
-        2. 对于每个chunk，只读取该时间范围内的消息
-        3. 对齐后立即调用frame_callback
-        4. 每个chunk处理完后调用save_callback释放内存
+        Strategy:
+        1. Divide main_timestamps into multiple chunks
+        2. For each chunk, only messages within that time range are read
+        3. frame_callback is called immediately after alignment
+        4. After each chunk is processed, save_callback is called to release the memory.
         
         Args:
-            bag_file: rosbag文件路径
-            main_timestamps: 对齐后的主时间戳序列
-            all_timestamps: 每个话题的原始时间戳列表（用于快速查找）
-            frame_callback: 处理每帧的回调函数 (aligned_frame, frame_idx) -> None
-            chunk_size: 每个chunk包含的帧数
-            save_callback: 每个chunk处理完后的回调（用于保存和释放内存）
+            bag_file: rosbagfile path
+            main_timestamps: Aligned primary timestamp sequence
+            all_timestamps: List of original timestamps for each topic (for quick lookups)
+            frame_callback: Callback function to handle each frame (aligned_frame, frame_idx) -> None
+            chunk_size: The number of frames contained in each chunk
+            save_callback: Callback after each chunk is processed (used to save and release memory)
         
         Returns:
-            处理的总帧数
+            Total frames processed
         """
         bag = self._load_bag(bag_file)
         
-        # 为每个话题构建时间戳索引（用于快速查找最近帧）
+        #Build a timestamp index for each topic (for quickly finding recent frames)
         timestamp_arrays = {k: np.array(v) for k, v in all_timestamps.items()}
         
-        # 预计算每个主时间戳对应的各话题索引（避免重复查找）
+        #Precompute each topic index corresponding to each primary timestamp (to avoid repeated searches)
         alignment_indices = self._precompute_alignment_indices(
             main_timestamps, timestamp_arrays
         )
         
-        # 检测kuavo_arm_traj的时间戳间隙
+        #Detect timestamp gaps in kuavo_arm_traj
         arm_traj_gaps = self._detect_arm_traj_gaps(all_timestamps)
         
         num_chunks = (len(main_timestamps) + chunk_size - 1) // chunk_size
@@ -179,8 +179,8 @@ class ChunkedRosbagProcessor:
             if not chunk_timestamps:
                 continue
             
-            # 确定该chunk的时间范围（扩展一点以确保对齐数据可用）
-            time_margin = 1.0 / self.train_hz  # 一帧的时间
+            #Determine the time range for that chunk (extend a bit to ensure aligned data is available)
+            time_margin = 1.0 / self.train_hz  #one frame time
             chunk_start_time = chunk_timestamps[0] - time_margin
             chunk_end_time = chunk_timestamps[-1] + time_margin
             
@@ -188,10 +188,10 @@ class ChunkedRosbagProcessor:
                         f"frames {start_idx}-{end_idx-1}, "
                         f"time range [{chunk_start_time:.3f}, {chunk_end_time:.3f}]")
             
-            # 读取该时间范围内的消息
+            #Read messages within this time range
             chunk_data = self._read_chunk_data(bag, chunk_start_time, chunk_end_time)
             
-            # 对齐并处理每帧
+            #Align and process each frame
             for local_idx, (global_idx, main_stamp) in enumerate(
                 zip(range(start_idx, end_idx), chunk_timestamps)
             ): 
@@ -207,10 +207,10 @@ class ChunkedRosbagProcessor:
                 frame_callback(aligned_frame, global_idx)
                 total_frames += 1
             
-            # 释放chunk数据
+            #Release chunk data
             del chunk_data
             
-            # 调用保存回调
+            #Call save callback
             if save_callback:
                 save_callback()
                 logger.info(f"Chunk {chunk_idx+1}/{num_chunks} processed and saved. "
@@ -226,8 +226,8 @@ class ChunkedRosbagProcessor:
         timestamp_arrays: Dict[str, np.ndarray]
     ) -> Dict[str, List[int]]:
         """
-        预计算每个主时间戳对应的各话题索引
-        使用二分查找，比每帧都查找快很多
+        Precompute each topic index corresponding to each primary timestamp
+        Use binary search, which is much faster than searching every frame
         """
         alignment_indices = {}
         
@@ -238,14 +238,14 @@ class ChunkedRosbagProcessor:
             
             indices = []
             for stamp in main_timestamps:
-                # 二分查找最近的时间戳
+                #Binary search for the most recent timestamp
                 idx = bisect.bisect_left(ts_array, stamp)
                 if idx == 0:
                     closest_idx = 0
                 elif idx == len(ts_array):
                     closest_idx = len(ts_array) - 1
                 else:
-                    # 选择更接近的
+                    #Choose the closer
                     if abs(ts_array[idx] - stamp) < abs(ts_array[idx-1] - stamp):
                         closest_idx = idx
                     else:
@@ -257,7 +257,7 @@ class ChunkedRosbagProcessor:
         return alignment_indices
     
     def _detect_arm_traj_gaps(self, all_timestamps: Dict[str, List[float]]) -> List[Tuple[float, float]]:
-        """检测kuavo_arm_traj的时间戳间隙"""
+        """Detect timestamp gaps in kuavo_arm_traj"""
         gaps = []
         if not self.only_half_up_body and "action.kuavo_arm_traj" in all_timestamps and len(all_timestamps["action.kuavo_arm_traj"]) > 0:
             timestamps = all_timestamps["action.kuavo_arm_traj"]
@@ -272,7 +272,7 @@ class ChunkedRosbagProcessor:
     
     def _read_chunk_data(self, bag: rosbag.Bag, start_time: float, end_time: float) -> Dict[str, Dict[float, dict]]:
         """
-        读取指定时间范围内的消息数据
+        Read message data within a specified time range
         
         Returns:
             {topic_key: {timestamp: msg_data}}
@@ -287,7 +287,7 @@ class ChunkedRosbagProcessor:
             else:
                 topic_to_key[v["topic"]].append(k)
         
-        # 使用时间范围过滤
+        #Use time range filtering
         try:
             start_ros_time = rospy.Time.from_sec(start_time)
             end_ros_time = rospy.Time.from_sec(end_time)
@@ -307,7 +307,7 @@ class ChunkedRosbagProcessor:
 
         except Exception as e:
             logger.warning(f"Time-range filtering failed: {e}, falling back to full scan")
-            # 回退到全量扫描+手动过滤
+            #Fall back to full scan + manual filtering
             for topic, msg, t in bag.read_messages(topics=list(topic_to_key.keys())):
                 ts = t.to_sec()
                 # ts = msg.header.stamp.to_sec()
@@ -332,17 +332,17 @@ class ChunkedRosbagProcessor:
         arm_traj_gaps: List[Tuple[float, float]]
     ) -> dict:
         """
-        对齐单帧数据
+        Align single frame data
         """
         aligned_frame = {"timestamp": main_stamp}
         
         for key in self._topic_process_map.keys():
-            # 特殊处理kuavo_arm_traj的间隙
+            #Special handling of gaps in kuavo_arm_traj
             if key == "action.kuavo_arm_traj" and arm_traj_gaps:
                 in_gap = any(gap_start < main_stamp < gap_end 
                             for gap_start, gap_end in arm_traj_gaps)
                 if in_gap:
-                    # 在间隙中，使用999填充
+                    #In the gaps, fill them with 999
                     sample_data = next(iter(chunk_data.get(key, {}).values()), None)
                     if sample_data and "data" in sample_data:
                         data_dim = len(sample_data["data"])
@@ -352,23 +352,23 @@ class ChunkedRosbagProcessor:
                         }
                     continue
             
-            # 获取预计算的索引
+            #Get precomputed index
             if key not in alignment_indices or global_idx >= len(alignment_indices[key]):
                 aligned_frame[key] = None
                 continue
             
             closest_idx = alignment_indices[key][global_idx]
             
-            # 从timestamp_arrays获取对应的时间戳
+            #Get the corresponding timestamp from timestamp_arrays
             if key not in timestamp_arrays or len(timestamp_arrays[key]) == 0:
                 aligned_frame[key] = None
                 continue
             
             target_ts = timestamp_arrays[key][closest_idx]
             
-            # 从chunk_data中查找数据
+            #Find data from chunk_data
             if key in chunk_data:
-                # 查找最接近target_ts的数据
+                #Find the data closest to target_ts
                 ts_list = list(chunk_data[key].keys())
                 if ts_list:
                     closest_chunk_ts = min(ts_list, key=lambda x: abs(x - target_ts))
@@ -381,7 +381,7 @@ class ChunkedRosbagProcessor:
         return aligned_frame
     
     def _load_bag(self, bag_file: str) -> rosbag.Bag:
-        """加载rosbag文件"""
+        """Load rosbag file"""
         try:
             return rosbag.Bag(bag_file)
         except rosbag.bag.ROSBagUnindexedException:

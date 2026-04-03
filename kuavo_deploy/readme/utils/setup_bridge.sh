@@ -1,62 +1,62 @@
 #!/bin/bash
 
-# 桥接接口名称
+#Bridge interface name
 BRIDGE=br0
 
-# 物理网卡名称（替换成你的接口名）
+#Physical network card name (replace with your interface name)
 IFACE1=enx00e04c684355
 IFACE2=enxc8a362b260f5
 
-# 检查桥接接口是否存在
+#Check if the bridge interface exists
 if ip link show "$BRIDGE" &>/dev/null; then
-    echo "错误：桥接接口 $BRIDGE 已存在，请先删除或使用其它名称。"
+    echo "Error: Bridge interface $BRIDGE already exists, please delete it first or use another name."
     exit 1
 fi
 
-# 检查物理网卡是否存在
+#Check if the physical network card exists
 if ! ip link show "$IFACE1" &>/dev/null; then
-    echo "错误：物理网卡 $IFACE1 不存在，退出脚本。"
+    echo "Error: Physical network card $IFACE1 does not exist, exit script."
     exit 1
 fi
 
 if ! ip link show "$IFACE2" &>/dev/null; then
-    echo "错误：物理网卡 $IFACE2 不存在，退出脚本。"
+    echo "Error: Physical network card $IFACE2 does not exist, exit script."
     exit 1
 fi
 
-# 桥接IP地址
+#Bridge IP address
 BRIDGE_IP=192.168.26.1/24
 
-echo "=== 停用接口 ==="
+echo "=== Deactivate interface ==="
 sudo ip link set dev $IFACE1 down
 sudo ip link set dev $IFACE2 down
 
-echo "=== 清除接口IP地址 ==="
+echo "=== Clear interface IP address ==="
 sudo ip addr flush dev $IFACE1
 sudo ip addr flush dev $IFACE2
 
-echo "=== 创建桥接接口 ==="
+echo "=== Create bridge interface ==="
 sudo ip link add name $BRIDGE type bridge
 
-echo "=== 将物理接口加入桥接 ==="
+echo "=== Add the physical interface to the bridge ==="
 sudo ip link set dev $IFACE1 master $BRIDGE
 sudo ip link set dev $IFACE2 master $BRIDGE
 
-echo "=== 启动物理接口和桥接接口 ==="
+echo "=== Start physical interface and bridge interface ==="
 sudo ip link set dev $IFACE1 up
 sudo ip link set dev $IFACE2 up
 sudo ip link set dev $BRIDGE up
 
-echo "=== 给桥接接口分配IP地址 ==="
+echo "=== Assign an IP address to the bridge interface ==="
 sudo ip addr add $BRIDGE_IP dev $BRIDGE
 
-echo "=== 显示接口状态 ==="
+echo "=== Show interface status ==="
 ip addr show $BRIDGE
 ip addr show $IFACE1
 ip addr show $IFACE2
 
-echo "临时关闭桥接流量经过 iptables 过滤"
+echo "Temporarily shut down bridge traffic through iptables filtering"
 
 sudo sysctl -w net.bridge.bridge-nf-call-iptables=0
 
-echo "=== 桥接配置完成 ==="
+echo "=== Bridge configuration completed ==="

@@ -1,16 +1,16 @@
-# 边侧机通信配置方案教程（基于下位机桥接边侧机和上位机两台机器）
+# Side machine communication configuration solution tutorial (based on the lower machine bridging the side machine and the upper machine)
 
 ---
 
-## 1. 用网线+usb转网口连接下位机、边侧机，查看下位机有线网口信息
+## 1. Use a network cable + USB port to connect to the lower computer and side computer, and check the wired network port information of the lower computer.
 
-- 查看有线网络接口：
+- View wired network interface:
 
 ```bash
 nmcli connection show
 ```
 
-得到类似如下的有线网口信息
+Get wired network port information similar to the following
 
 ```bash
 NAME                   UUID                                  TYPE      DEVICE              
@@ -20,82 +20,82 @@ Wired connection 2     65e0a36e-e998-38cd-ad8c-a73ad59e10c0  ethernet  enx00e04c
 
 ---
 
-## 2. 创建并配置桥接接口
+## 2. Create and configure the bridge interface
 
-假设下位机网口：
+Assume that the network port of the lower computer is:
 
-- `enx00e04c684355`（连边侧机）  
-- `enxc8a362b260f5`（连上位机）
+- `enx00e04c684355` (connected to side machine)
+- `enxc8a362b260f5` (connected to host computer)
 
-### 新建桥接配置脚本 `setup_bridge.sh`, 注意桥接接口名不要与已存在的重复
+### Create a new bridge configuration script `setup_bridge.sh`, be careful not to duplicate the bridge interface name with an existing one
 
 ```bash
 #!/bin/bash
 
-# 桥接接口名称
+# Bridge interface name
 BRIDGE=br0
 
-# 物理网卡名称（替换成你的接口名）
+#Physical network card name (replace with your interface name)
 IFACE1=enx00e04c684355
 IFACE2=enxc8a362b260f5
 
-# 检查桥接接口是否存在
+# Check if the bridge interface exists
 if ip link show "$BRIDGE" &>/dev/null; then
-    echo "错误：桥接接口 $BRIDGE 已存在，请先删除或使用其它名称。"
+    echo "Error: Bridge interface $BRIDGE already exists. Please delete it first or use another name."
     exit 1
 fi
 
-# 检查物理网卡是否存在
+# Check if the physical network card exists
 if ! ip link show "$IFACE1" &>/dev/null; then
-    echo "错误：物理网卡 $IFACE1 不存在，退出脚本。"
+    echo "Error: The physical network card $IFACE1 does not exist, exit the script."
     exit 1
 fi
 
 if ! ip link show "$IFACE2" &>/dev/null; then
-    echo "错误：物理网卡 $IFACE2 不存在，退出脚本。"
+    echo "Error: The physical network card $IFACE2 does not exist, exit the script."
     exit 1
 fi
 
-# 桥接IP地址
+# Bridge IP address
 BRIDGE_IP=192.168.26.1/24
 
-echo "=== 停用接口 ==="
+echo "=== Disable interface ==="
 sudo ip link set dev $IFACE1 down
 sudo ip link set dev $IFACE2 down
 
-echo "=== 清除接口IP地址 ==="
+echo "=== Clear interface IP address ==="
 sudo ip addr flush dev $IFACE1
 sudo ip addr flush dev $IFACE2
 
-echo "=== 创建桥接接口 ==="
+echo "=== Create bridge interface ==="
 sudo ip link add name $BRIDGE type bridge
 
-echo "=== 将物理接口加入桥接 ==="
+echo "=== Add physical interface to bridge ==="
 sudo ip link set dev $IFACE1 master $BRIDGE
 sudo ip link set dev $IFACE2 master $BRIDGE
 
-echo "=== 启动物理接口和桥接接口 ==="
+echo "=== Start physical interface and bridge interface ==="
 sudo ip link set dev $IFACE1 up
 sudo ip link set dev $IFACE2 up
 sudo ip link set dev $BRIDGE up
 
-echo "=== 给桥接接口分配IP地址 ==="
+echo "=== Assign IP address to bridge interface ==="
 sudo ip addr add $BRIDGE_IP dev $BRIDGE
 
-echo "=== 显示接口状态 ==="
+echo "=== Display interface status ==="
 ip addr show $BRIDGE
 ip addr show $IFACE1
 ip addr show $IFACE2
 
-echo "临时关闭桥接流量经过 iptables 过滤"
+echo "Temporarily close the bridge traffic and filter it through iptables"
 
 sudo sysctl -w net.bridge.bridge-nf-call-iptables=0
 
-echo "=== 桥接配置完成 ==="
+echo "=== Bridge configuration completed ==="
 
 ```
 
-执行：
+Execution:
 
 ```bash
 sudo chmod +x setup_bridge.sh
@@ -104,87 +104,87 @@ sudo bash setup_bridge.sh
 
 ---
 
-## 3.  边侧机上分配静态IP的步骤（上位机和下位机有线连接的ip一般已经配好，一般为192.168.26.x网段，注意边侧机网段应在同一网段）
+## 3. Steps to allocate static IP on the side machine (the IP of the wired connection between the upper machine and the lower machine has generally been assigned, usually the 192.168.26.x network segment. Note that the network segment of the side machine should be in the same network segment)
 
-### 查看已有的网络连接配置
+### View existing network connection configuration
 
 ```bash
 nmcli connection show
 ```
 
-该命令列出当前所有网络连接及其名称、UUID、类型和设备。
+This command lists all current network connections with their name, UUID, type, and device.
 
-### 修改指定有线连接为静态IP配置
+### Modify the specified wired connection to a static IP configuration
 
-假设要修改的连接名称是 `"有线连接 1"`，配置静态IP地址和掩码为 `192.168.26.10/24`，不设置网关，手动配置：
-
-```bash
-sudo nmcli connection modify "有线连接 1" ipv4.addresses 192.168.26.10/24 ipv4.gateway "" ipv4.method manual
-```
-
-说明：
-
-- `ipv4.addresses` 设置静态IP地址及子网掩码  
-- `ipv4.gateway` 留空表示无默认网关  
-- `ipv4.method manual` 设置为手动静态IP配置  
-
-### 激活修改后的网络连接
+Assume that the connection name to be modified is `"Wired Connection 1"`, configure the static IP address and mask as `192.168.26.10/24`, do not set a gateway, and configure it manually:
 
 ```bash
-sudo nmcli connection up "有线连接 1"
+sudo nmcli connection modify "wired connection 1" ipv4.addresses 192.168.26.10/24 ipv4.gateway "" ipv4.method manual
 ```
 
-此命令重新激活指定连接，使配置生效。
+Description:
 
-### 验证网络配置
+- `ipv4.addresses` Set static IP address and subnet mask
+- `ipv4.gateway` left blank means there is no default gateway
+- `ipv4.method manual` is set to manual static IP configuration
 
-查看当前接口IP：
+### Activate modified network connection
+
+```bash
+sudo nmcli connection up "wired connection 1"
+```
+
+This command reactivates the specified connection to make the configuration take effect.
+
+### Verify network configuration
+
+Check the current interface IP:
 
 ```bash
 ip addr show
 ```
 
-或查看连接详情：
+Or view connection details:
 
 ```bash
-nmcli connection show "有线连接 1"
+nmcli connection show "wired connection 1"
 ```
 
-完成以上步骤后，边侧机的有线接口将使用静态IP `192.168.26.10`，在对应子网内通信。
+After completing the above steps, the wired interface of the edge machine will use the static IP `192.168.26.10` to communicate within the corresponding subnet.
 
 ---
 
-## 4. 验证步骤
+## 4. Verification steps
 
-- 测试互相 ping：
+- Test pinging each other:
 
 ```bash
-# 示例
-ping 192.168.26.12  # 边侧机 ping 上位机
-ping 192.168.26.10  # 上位机 ping 边侧机
+# Example
+ping 192.168.26.12 # Side computer ping host computer
+ping 192.168.26.10 # Host computer ping edge computer
 ```
 
-- ping通后在边侧机设置ROS_IP,ROS_MASTER_URI:
+- After pinging, set ROS_IP, ROS_MASTER_URI on the side machine:
 
 ```bash
-# 1. 在 ~/.bashrc 文件末尾添加注释，方便识别
-echo "# ROS网络配置" >> ~/.bashrc
+# 1. Add a comment at the end of the ~/.bashrc file for easy identification
+echo "# ROS network configuration" >> ~/.bashrc
 
-# 2. 添加 ROS_IP 环境变量
+# 2. Add ROS_IP environment variable
 echo "export ROS_IP=192.168.26.10" >> ~/.bashrc
 
-# 3. 添加 ROS_MASTER_URI 环境变量
+# 3. Add ROS_MASTER_URI environment variable
 echo "export ROS_MASTER_URI=http://192.168.26.1:11311" >> ~/.bashrc
 
-# 4. 立即让修改生效
+# 4. Make changes take effect immediately
 source ~/.bashrc
 
 ```
 
-- 测试rostopic通信
+- Test rostopic communication
 
 ```bash
-# 2. Verify ros topic(有数据则没问题)
+# 2. Verify ros topic (no problem if there is data)
 rostopic echo /sensors_data_raw
 rostopic echo /cam_h/color/image_raw/compressed
 rostopic echo /cam_r/color/image_raw/compressed

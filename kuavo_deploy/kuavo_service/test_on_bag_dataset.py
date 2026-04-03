@@ -12,7 +12,7 @@ import kuavo_data.common.kuavo_dataset as kuavo
 
 def read_and_process_episode_data(ep_path):
     def init_param():
-        # 手动加载配置
+        #Manually load configuration
         from omegaconf import OmegaConf
         config_path = Path(__file__).parents[2] / "configs" / "data" / "KuavoRosbag2Lerobot.yaml"
         cfg = OmegaConf.load(config_path)
@@ -65,7 +65,7 @@ def read_and_process_episode_data(ep_path):
         claw_action = rq2f85_action
         claw_state = rq2f85_state
 
-    # 对手部进行二值化处理
+    #Binarize the hands
     if kuavo.IS_BINARY:
         qiangnao_state = np.where(qiangnao_state > 50, 1, 0)
         qiangnao_action = np.where(qiangnao_action > 50, 1, 0)
@@ -74,7 +74,7 @@ def read_and_process_episode_data(ep_path):
         rq2f85_state = np.where(rq2f85_state > 0.4, 1, 0)
         rq2f85_action = np.where(rq2f85_action > 70, 1, 0)
     else:
-        # 进行数据归一化处理
+        #Perform data normalization processing
         claw_state = claw_state / 100
         claw_action = claw_action / 100
         qiangnao_state = qiangnao_state / 100
@@ -82,16 +82,16 @@ def read_and_process_episode_data(ep_path):
         rq2f85_state = rq2f85_state / 0.8
         rq2f85_action = rq2f85_action / 140
     ########################
-    # delta 处理
+    #delta processing
     ########################
     # =====================
-    # 为了解决零点问题，将每帧与第一帧相减
+    #To solve the zero point problem, subtract each frame from the first frame
     if kuavo.RELATIVE_START:
-        # 每个state, action与他们的第一帧相减
+        #Each state, action is subtracted from their first frame
         state = state - state[0]
         action = action - action[0]
         
-    # ===只处理delta action
+    #===Only handle delta actions
     if kuavo.DELTA_ACTION:
         # delta_action = action[1:] - state[:-1]
         # trim = lambda x: x[1:] if (x is not None) and (len(x) > 0) else x
@@ -115,7 +115,7 @@ def read_and_process_episode_data(ep_path):
     for i in range(num_frames):
         if kuavo.ONLY_HALF_UP_BODY:
             if kuavo.USE_LEJU_CLAW:
-                # 使用lejuclaw进行上半身关节数据转换
+                #Use lejuclaw to convert upper body joint data
                 if kuavo.CONTROL_HAND_SIDE == "left" or kuavo.CONTROL_HAND_SIDE == "both":
                     output_state = state[i, kuavo.SLICE_ROBOT[0][0]:kuavo.SLICE_ROBOT[0][-1]]
                     output_state = np.concatenate((output_state, claw_state[i, kuavo.SLICE_CLAW[0][0]:kuavo.SLICE_CLAW[0][-1]].astype(np.float32)), axis=0)
@@ -134,10 +134,10 @@ def read_and_process_episode_data(ep_path):
                         output_action = np.concatenate((output_action, claw_action[i, kuavo.SLICE_CLAW[1][0]:kuavo.SLICE_CLAW[1][-1]].astype(np.float32)), axis=0)
 
             elif kuavo.USE_QIANGNAO:
-                # 类型: kuavo_sdk/robotHandPosition
-                # left_hand_position (list of float): 左手位置，包含6个元素，每个元素的取值范围为[0, 100], 0 为张开，100 为闭合。
-                # right_hand_position (list of float): 右手位置，包含6个元素，每个元素的取值范围为[0, 100], 0 为张开，100 为闭合。
-                # 构造qiangnao类型的output_state的数据结构的长度应该为26
+                #Type: kuavo_sdk/robotHandPosition
+                #left_hand_position (list of float): left hand position, contains 6 elements, the value range of each element is [0, 100], 0 is open, 100 is closed.
+                #right_hand_position (list of float): Right hand position, including 6 elements, the value range of each element is [0, 100], 0 is open, 100 is closed.
+                #The length of the data structure constructing the output_state of the qiangnao type should be 26
                 if kuavo.CONTROL_HAND_SIDE == "left" or kuavo.CONTROL_HAND_SIDE == "both":
                     output_state = state[i, kuavo.SLICE_ROBOT[0][0]:kuavo.SLICE_ROBOT[0][-1]]
                     output_state = np.concatenate((output_state, qiangnao_state[i, kuavo.SLICE_DEX[0][0]:kuavo.SLICE_DEX[0][-1]].astype(np.float32)), axis=0)
@@ -158,18 +158,18 @@ def read_and_process_episode_data(ep_path):
                 # output_action = np.concatenate((output_action, action[i, 26:28]), axis=0)
         else:
             if kuavo.USE_LEJU_CLAW:
-                # 使用lejuclaw进行全身关节数据转换
-                # 原始的数据是28个关节的数据对应原始的state和action数据的长度为28
-                # 数据顺序:
-                # 前 12 个数据为下肢电机数据:
-                #     0~5 为左下肢数据 (l_leg_roll, l_leg_yaw, l_leg_pitch, l_knee, l_foot_pitch, l_foot_roll)
-                #     6~11 为右下肢数据 (r_leg_roll, r_leg_yaw, r_leg_pitch, r_knee, r_foot_pitch, r_foot_roll)
-                # 接着 14 个数据为手臂电机数据:
-                #     12~18 左臂电机数据 ("l_arm_pitch", "l_arm_roll", "l_arm_yaw", "l_forearm_pitch", "l_hand_yaw", "l_hand_pitch", "l_hand_roll")
-                #     19~25 为右臂电机数据 ("r_arm_pitch", "r_arm_roll", "r_arm_yaw", "r_forearm_pitch", "r_hand_yaw", "r_hand_pitch", "r_hand_roll")
-                # 最后 2 个为头部电机数据: head_yaw 和 head_pitch
+                #Using lejuclaw for whole body joint data conversion
+                #The original data is the data of 28 joints, and the length of the original state and action data is 28
+                #Data order:
+                #The first 12 data are lower limb motor data:
+                #0~5 is left lower limb data (l_leg_roll, l_leg_yaw, l_leg_pitch, l_knee, l_foot_pitch, l_foot_roll)
+                #6~11 is the right lower limb data (r_leg_roll, r_leg_yaw, r_leg_pitch, r_knee, r_foot_pitch, r_foot_roll)
+                #The next 14 data are arm motor data:
+                #12~18 Left arm motor data ("l_arm_pitch", "l_arm_roll", "l_arm_yaw", "l_forearm_pitch", "l_hand_yaw", "l_hand_pitch", "l_hand_roll")
+                #19~25 is the right arm motor data ("r_arm_pitch", "r_arm_roll", "r_arm_yaw", "r_forearm_pitch", "r_hand_yaw", "r_hand_pitch", "r_hand_roll")
+                #The last 2 are head motor data: head_yaw and head_pitch
                 
-                # TODO：构造目标切片
+                #TODO: Construct target slice
                 output_state = state[i, 0:19]
                 output_state = np.insert(output_state, 19, claw_state[i, 0].astype(np.float32))
                 output_state = np.concatenate((output_state, state[i, 19:26]), axis=0)
@@ -223,7 +223,7 @@ def depth_preprocess(depth, device="cpu",depth_range=[0,1000]):
     depth_uint16 =  torch.tensor(depth,dtype=torch.float32).clamp(*depth_range).unsqueeze(0).unsqueeze(0).to(device, non_blocking=True)
     max_depth = depth_uint16.max()
     min_depth = depth_uint16.min()
-    depth_normalized = (depth_uint16 - min_depth) / (max_depth - min_depth + 1e-9)  # 归一化到 [0, 1]
+    depth_normalized = (depth_uint16 - min_depth) / (max_depth - min_depth + 1e-9)  #normalized to [0, 1]
     # depth_normalized = (depth_normalized * 255).astype(np.uint8)
     return depth_normalized
     
@@ -243,10 +243,10 @@ def hardware_obses_to_policy_obs_dict(obs):
 
 def main(ep_path="/home/ubun-new/go_bag/bag_for_handover/A10-A01-206-208-92-71-dex_hand-20250930100830-v1.bag"):
     policy_client = PolicyClient()
-    frames = read_and_process_episode_data(ep_path) # 加载一条遥操数据，每步为一个字典 包含observation.state, observation.images.head_cam_h, observation.images.wrist_cam_l, observation.images.wrist_cam_r, action
+    frames = read_and_process_episode_data(ep_path) #Load a piece of remote operation data, each step is a dictionary including observation.state, observation.images.head_cam_h, observation.images.wrist_cam_l, observation.images.wrist_cam_r, action
     preprocessor, postprocessor = make_pre_post_processors(None,"outputs/train/test_handover/state_fuse/run_1008/epochbest")
     for i in range(len(frames)):
-    	# 将真机的观测处理成字典
+    	#Process the observations of the real machine into a dictionary
         obs_dict = hardware_obses_to_policy_obs_dict(frames[i])
         # print("head img",obs_dict["observation.depth_h"].max())
 
@@ -257,7 +257,7 @@ def main(ep_path="/home/ubun-new/go_bag/bag_for_handover/A10-A01-206-208-92-71-d
         print("head img",obs_dict["observation.depth_h"].min(), obs_dict["observation.depth_h"].max())
         # raise ValueError()
 
-        action_pred = policy_client.select_action(obs_dict) # numpy(26,)维动作，按照kuavo转lerobot的方式 由7维左臂+6维左手+7维右臂+6维右手组成。其中手臂的动作为目标关节角，灵巧手的动作在[0,1]之间、需要乘以100再发给真机
+        action_pred = policy_client.select_action(obs_dict) #The numpy(26,) dimensional action is composed of 7-dimensional left arm + 6-dimensional left arm + 7-dimensional right arm + 6-dimensional right hand according to the method of kuavo to lerobot. The movement of the arm is the target joint angle. The movement of the dexterous hand is between [0,1] and needs to be multiplied by 100 before sending it to the real machine.
         action_pred = postprocessor(action_pred).squeeze(0).cpu().numpy()
         action_groundtruth = frames[i]["action"].cpu().numpy()
         print("Timestep:", i, "Action MSE:", ((action_pred - action_groundtruth)**2).mean())

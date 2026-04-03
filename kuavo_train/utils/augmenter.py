@@ -64,11 +64,13 @@ class DeterministicAugmenterColor:
             self.params['max_offset'] = random.uniform(1, 3) 
 
     def apply_augment_sequence(self, images):
-        # 保存原始形状以便恢复
+        #Save original shape for restoration
+        # Cache the original shape so that it can be easily recovered
         orig_shape = images.shape
         B, C, H, W = orig_shape[0], orig_shape[-3], orig_shape[-2], orig_shape[-1]
         
-        # 将输入统一转换为4D张量 (B, C, H, W)
+        #Convert input uniformly to 4D tensors (B, C, H, W)
+        # All inputs converted to BCHW
         if images.ndim == 3:
             images = images.unsqueeze(0)  # (C,H,W) -> (1,C,H,W)
         elif images.ndim == 4:
@@ -81,31 +83,36 @@ class DeterministicAugmenterColor:
             B, T, N, C, H, W = images.shape
             images = images.view(B * T * N, C, H, W)
         
-        # 应用增强
+        #Application enhancement
+        # Apply Augmentation
         if self.aug_type == 'none':
             augmented = images
         
         elif self.aug_type == 'color_jitter':
-            # 生成随机参数（整个batch使用相同参数）
+            #Generate random parameters (use the same parameters for the entire batch)
+            # Generate random parameters (Same parameters for the whole batch)
             brightness = 2 * self.params['brightness'] * torch.rand(1, device=images.device) + 1 - self.params['brightness']
             contrast = 2 * self.params['contrast'] * torch.rand(1, device=images.device) + 1 - self.params['contrast']
             saturation = 2 * self.params['saturation'] * torch.rand(1, device=images.device) + 1 - self.params['saturation']
             hue = 2 * self.params['hue'] * torch.rand(1, device=images.device) - self.params['hue']
             
-            # 应用颜色抖动
+            #Apply color dithering
+            # Apply Colour jitter
             augmented = kornia.enhance.adjust_brightness(images, brightness)
             augmented = kornia.enhance.adjust_contrast(augmented, contrast)
             augmented = kornia.enhance.adjust_saturation(augmented, saturation)
             augmented = kornia.enhance.adjust_hue(augmented, hue)
         
         elif self.aug_type == 'random_mask':
-            # 计算掩码位置和大小
+            #Calculate mask position and size
+            # Compute mask location and size
             mask_h = int(self.params['mask_size'][0] * H)
             mask_w = int(self.params['mask_size'][1] * W)
             top = int(self.params['mask_position'][0] * (H - mask_h))
             left = int(self.params['mask_position'][1] * (W - mask_w))
             
-            # 创建掩码
+            #Create mask
+            # Generate mask
             mask = torch.ones_like(images)
             mask[:, :, top:top+mask_h, left:left+mask_w] = 0
             augmented = images * mask
@@ -139,7 +146,8 @@ class DeterministicAugmenterColor:
         else:
             raise ValueError(f"Invalid augmentation type: {self.aug_type}")
         
-        # 恢复原始形状
+        #Restore original shape
+        # Recover original shape
         augmented = augmented.view(orig_shape)
         return augmented
             
@@ -597,12 +605,13 @@ def crop_image(image, target_range, random_crop=False):
              If a list is provided, each element will be cropped separately.
     - target_range: list or tuple with two tuples: [(x_start, x_end), (y_start, y_end)]
                     defining the crop region.
-    - image_type: str, 'rgb' or 'depth' (保留此参数以保持接口一致，但裁剪过程中不使用)
+    - image_type: str, 'rgb' or 'depth' (This parameter is retained to keep the interface consistent, but is not used during tailoring)
     
     Returns:
     - cropped_image: np.ndarray or list of np.ndarray, the cropped image(s) with the same format as the input.
     """
-    # 确认 target_range 格式正确
+    #Confirm target_range format is correct
+    # Ensure that target_range is formatted correctly
     try:
         target_range = list(target_range)
     except Exception as e:

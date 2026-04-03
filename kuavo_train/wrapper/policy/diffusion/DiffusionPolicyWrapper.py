@@ -83,7 +83,7 @@ class CustomDiffusionPolicyWrapper(DiffusionPolicy):
         "horizon" may not the best name to describe what the variable actually means, because this period is
         actually measured from the first observation which (if `n_obs_steps` > 1) happened in the past.
         """
-        # 与环境交互时无需图像增强
+        #No need for image enhancement when interacting with the environment
         if ACTION in batch:
             batch.pop(ACTION)
         
@@ -124,16 +124,16 @@ class CustomDiffusionPolicyWrapper(DiffusionPolicy):
     
 
     # def _async_predict(self, batch, noise):
-    #     """在后台线程中执行推理"""
+    #     """Perform inference in a background thread"""
     #     def worker():
-    #         # 先设置标记，表示推理正在进行
+    ## Set the flag first to indicate that inference is in progress
     #         with self._lock:
     #             self._predicting = True
 
-    #         # 执行耗时预测（不要在锁里面）
-    #         actions = self.predict_action_chunk(batch, noise=noise)  # 耗时 0.26s
+    ## Execute time-consuming prediction (not inside the lock)
+    #actions = self.predict_action_chunk(batch, noise=noise) # takes 0.26s
 
-    #         # 将结果写入共享变量，同时更新状态
+    ##Write the result to the shared variable and update the status at the same time
     #         with self._lock:
     #             self._next_actions = actions.transpose(0, 1)
     #             self._predicting = False
@@ -163,7 +163,7 @@ class CustomDiffusionPolicyWrapper(DiffusionPolicy):
     #     "horizon" may not the best name to describe what the variable actually means, because this period is
     #     actually measured from the first observation which (if `n_obs_steps` > 1) happened in the past.
     #     """
-    #     # 与环境交互时无需图像增强
+    ## No need for image enhancement when interacting with the environment
     #     if ACTION in batch:
     #         batch.pop(ACTION)
         
@@ -198,25 +198,25 @@ class CustomDiffusionPolicyWrapper(DiffusionPolicy):
     #         self._async_predict(batch, noise)
     #         print(f"Episode {episode}, Step {step}: ~~~~~~~~~~~~~~Generating new action chunk using diffusion model...~~~~~~~~~~~~~~~~~~")
 
-    #     # (2) 如果真的没有动作可用，说明异步任务太慢 -> 等待它完成
+    ## (2) If there is really no action available, the asynchronous task is too slow -> wait for it to complete
     #     if len(self._queues[ACTION]) == 0:
     #         if self._predicting:
     #             print("⚠️ Waiting for model inference to complete...")
     #             while self._predicting:
     #                 time.sleep(0.1)
-    #         # 推理结束后合并结果
+    ## Merge the results after inference
     #         if self._next_actions is not None:
     #             with self._lock:
     #                 self._queues[ACTION].extend(self._next_actions)
     #                 self._next_actions = None
 
-    #     # (3) 如果异步推理完成，队列还没空，提前合并结果
+    ## (3) If asynchronous inference is completed and the queue is not empty yet, merge the results in advance
     #     if self._next_actions is not None and len(self._queues[ACTION]) > (self.config.n_action_steps//2):
     #         with self._lock:
     #             self._queues[ACTION].extend(self._next_actions)
     #             self._next_actions = None
 
-    #     # (4) 正常取动作
+    ## (4) Normal action
     #     action = self._queues[ACTION].popleft()
     #     return action
 

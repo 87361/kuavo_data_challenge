@@ -26,7 +26,7 @@ def load_rng_state(filepath: str) -> None:
 
 def worker_init_fn(worker_id: int) -> None:
     """Ensure each worker has a distinct reproducible seed."""
-    # 让每个 worker 基于全局种子 + worker_id 派生
+    #Let each worker be derived based on global seed + worker_id
     seed = torch.initial_seed() % 2**32
     np.random.seed(seed + worker_id)
     random.seed(seed + worker_id)

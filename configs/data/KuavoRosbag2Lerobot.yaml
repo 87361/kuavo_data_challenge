@@ -1,54 +1,55 @@
-hydra:  # Hydra 配置文件保存目录，仅供参数检查使用
+hydra:  # Hydra config directory, for parameter checking only
   run:
-    dir: ./outputs/data_cvt_hydra_save/singlerun/${now:%Y%m%d_%H%M%S}  # 单次运行目录
+    dir: ./outputs/data_cvt_hydra_save/singlerun/${now:%Y%m%d_%H%M%S}  # Single run root dir
   sweep:
-    dir: ./outputs/data_cvt_hydra_save/multirun/${now:%Y%m%d_%H%M%S}  # sweep 时的根目录
+    dir: ./outputs/data_cvt_hydra_save/multirun/${now:%Y%m%d_%H%M%S}  # sweep root dir
     subdir: ${hydra:job.override_dirname}
 
 
-# kuavo rosbag数据转换成lerobot-parquet格式的配置文件
-# 请注意！！！
-# 本分支的数转代码与lerobot版本同步更新，目前支持了lerobot0.4.2版本
-# 由于版本变更，数据转换代码、训练、推理代码都有较大改动，请务必安装使用lerobot0.4.2版本的代码进行数据转换
-# lerobot地址：https://github.com/huggingface/lerobot
+#Convert kuavo rosbag data into lerobot-parquet format configuration file
+#Please pay attention! ! !
+#The data conversion code of this branch is updated simultaneously with the lerobot version, and currently supports lerobot version 0.4.2
+#Due to version changes, the data conversion code, training, and inference codes have undergone major changes. Please be sure to install and use the lerobot0.4.2 version of the code for data conversion.
+#lerobot address: https://github.com/huggingface/lerobot
 
 rosbag:
-  rosbag_dir: /path/to/your/rosbag # rosbag文件存放的目录
-  num_used: null # 使用的rosbag数量(若设置为任意数字，则会随机采样选择)，null表示使用全部rosbag
-  lerobot_dir: /your/path/to/your/lerobotdata/  # 转换后的lerobot文件的保存目录，会在该目录下生成lerobot子目录，并存放对应数据
-  chunk_size: 100  # 这是目前使用流式读取bag并按块处理的大小设置，与模仿学习动作块那个没有任何关系
+  rosbag_dir: /path/to/your/rosbag #Directory where rosbag files are stored
+  num_used: null #The number of rosbags used (if set to any number, random sampling will be selected), null means using all rosbags
+  lerobot_dir: /your/path/to/your/lerobotdata/  #The directory where the converted lerobot files are saved will generate a lerobot subdirectory in this directory and store the corresponding data.
+  chunk_size: 100  #This is the size setting that currently uses streaming to read the bag and process it in blocks. It has nothing to do with the one that imitates learning action blocks.
 
 dataset:
   #!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-  only_arm: true  # 默认true, 是否只使用手臂数据, 选择true会自动屏蔽足关节数据，false会支持下肢的即本体所处位置及旋转x,y，yaw的数据
-  #!!!!!!!!!task4请设置为false,task4请设置为false,task4请设置为false!!!!!!!!!!!!!!
+  only_arm: true  # Default is true, whether to use only arm data. Setting this to true automatically ignores all lower limb data.
+  #!!!!!!!!!!!!Should be true for all tasks in this competition!!!!!!!!!!!!!!!
   #!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-  eef_type: leju_claw # 末端执行器类型，仿真选择：rq2f85, 真机可选：leju_claw,（夹爪） qiangnao，（灵巧手）
-  which_arm: right  # 需要哪一只手臂的关节 + 图像数据，可选: left, right, both，注意图像数据会同时包含头部相机图像
-  use_depth: False  # 是否需要深度图像数据，与上面手臂对应的深度图像数据, 此分支act和dp均支持了深度图像
-  depth_range: [0, 1500]  # 深度图的裁剪范围，单位：毫米，将用于做归一化
+  eef_type: leju_claw #End effector type, simulation selection: rq2f85, real machine optional: leju_claw, (gripper) qiangnao, (dexterous hand)
+  which_arm: right  #Which arm's joint + image data is needed, optional: left, right, both. Note that the image data will also include the head camera image.
+  use_depth: False  #Do you need depth image data? Depth image data corresponding to the upper arm. Both act and dp of this branch support depth images.
+  depth_range: [0, 1500]  #The clipping range of the depth map, in millimeters, will be used for normalization
  
-  task_description: "Pick and Place" # 任务描述，自定义
+  task_description: "Pick and Place" # Task description, change if desired
 
-  train_hz: 10  # 训练数据的采样频率
-  main_timeline: head_cam_h # 将哪个相机设为主相机，默认主相机来自：head_cam_h, 可选：wrist_cam_l, wrist_cam_r
-  main_timeline_fps: 30 # 主相机的帧率，必须稳定，默认30帧
-  sample_drop: 10 # 丢弃episode前后的10帧
+  train_hz: 10  # Training data sampling rate
+  main_timeline: head_cam_h # Which cam is your main cam. Default is head_cam_h. Could be changed to wrist_cam_l, wrist_cam_r wrist cam if desired.
+  main_timeline_fps: 30 # Main cam frame rate, must be stable. Default is 30fps.
+  sample_drop: 10 # Drop 10 frames in the beginning and end of each episode.
 
-  # dex_dof_needed是强脑手需要的自由度数目。强脑灵巧手有6个自由度。标准握拳状态[100] * 6, 张开状态[0] * 6。
-  # 1: 不需要精细操作或者多指协同操作时，通常为设置为1，表示只需要第一个关节作为开合依据,此时需要用[0, 100, 0, 0, 0, 0]表示张开状态, [100] * 6表示握拳状态。
-  # 2(暂未测试): 或者设置为2，目前的手柄遥操作只有两个自由度。0,2,3,4,5自由度绑定为1个自由度。
-  # 6(暂未测试): 如果脱离手柄使用手指灵巧操作，可以设置为6，表示需要所有6个自由度。
+  # dex_dof_needed is the dof needed for dex hand. The qiangnao dexhand has 6 dof, with fully closed being [100] * 6, fully open being [0] * 6.
+  # 1: When precise operation or multi-finger coordinated operation is not required, it is usually set to 1, which means that only the first joint is needed as the basis for opening and closing.
+  #    In this case, [0, 100, 0, 0, 0, 0] is used to represent the open state, and [100] * 6 represents the clenched fist state.
+  # 2(Untested): 0,2,3,4,5 dof becomes a single dof.
+  # 6(Untested): All 6 dof are available.
   dex_dof_needed: 1   # default=1
 
-  is_binary: false  # 是否将开合二值化, default=false
-  delta_action: false # 是否使用增量动作，default=false，正在开发测试中
-  relative_start: false # 是否使用相对起始位置, default=false
+  is_binary: false  # Is open and close binary? default=false
+  delta_action: false # Whether to use delta for action. default=false. Still under development
+  relative_start: false # Whether to use relative start position. default=false
 
 
   resize:
-    width: 848  # 图像缩放宽度，注意请先查看（推荐浏览器foxglove工具）rosbag中图像的原始尺寸，避免放大或缩小带来模糊或拉伸形变等问题
-    height: 480  # 图像缩放高度，注意请先查看（推荐浏览器foxglove工具）rosbag中图像的原始尺寸，避免放大或缩小带来模糊或拉伸形变等问题
+    width: 848  #Image scaling width, please check first (recommended browser foxglove tool) the original size of the image in rosbag to avoid problems such as blurring or stretching deformation caused by enlarging or reducing.
+    height: 480  #Image zoom height. Please check first (recommended browser foxglove tool) the original size of the image in rosbag to avoid problems such as blurring or stretching deformation caused by enlarging or reducing.
 
 
 

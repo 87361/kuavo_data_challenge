@@ -14,9 +14,9 @@ class Config:
     only_arm: bool
     eef_type: str  # 'qiangnao' or 'leju_claw'
     which_arm: str  # 'left', 'right', or 'both'
-    use_depth: bool # 是否使用深度数据
+    use_depth: bool #Whether to use depth data
     depth_range: tuple[int, int]
-    dex_dof_needed: int  # 通常为1，表示只需要第一个关节作为开合依据
+    dex_dof_needed: int  #Usually 1, indicating that only the first joint is needed as the basis for opening and closing.
     
     # Timeline settings
     train_hz: int
@@ -80,11 +80,11 @@ class Config:
     def dex_slice(self) -> List[List[int]]:
         """Get dex slice based on which arm and dex_dof_needed."""
         if self.which_arm == 'left':
-            return [[0, self.dex_dof_needed], [6, 6]]  # 左手使用指定自由度，右手不使用
+            return [[0, self.dex_dof_needed], [6, 6]]  #The left hand uses the specified degrees of freedom, and the right hand does not use it.
         elif self.which_arm == 'right':
-            return [[0, 0], [6, 6 + self.dex_dof_needed]]  # 左手不使用，右手使用指定自由度
+            return [[0, 0], [6, 6 + self.dex_dof_needed]]  #The left hand is not used, and the right hand is used with the specified degree of freedom.
         elif self.which_arm == 'both':
-            return [[0, self.dex_dof_needed], [6, 6 + self.dex_dof_needed]]  # 双手都使用指定自由度
+            return [[0, self.dex_dof_needed], [6, 6 + self.dex_dof_needed]]  #Both hands use specified degrees of freedom
         else:
             raise ValueError(f"Invalid which_arm: {self.which_arm}")
     
@@ -92,11 +92,11 @@ class Config:
     def claw_slice(self) -> List[List[int]]:
         """Get claw slice based on which arm."""
         if self.which_arm == 'left':
-            return [[0, 1], [1, 1]]  # 左手使用夹爪，右手不使用
+            return [[0, 1], [1, 1]]  #The left hand uses the gripper, the right hand does not use it
         elif self.which_arm == 'right':
-            return [[0, 0], [1, 2]]  # 左手不使用，右手使用夹爪
+            return [[0, 0], [1, 2]]  #The left hand is not used and the right hand is used.
         elif self.which_arm == 'both':
-            return [[0, 1], [1, 2]]  # 双手都使用夹爪
+            return [[0, 1], [1, 2]]  #Use grippers on both hands
         else:
             raise ValueError(f"Invalid which_arm: {self.which_arm}")
 
