@@ -195,6 +195,15 @@ def populate_dataset_chunked(
     """
     if episodes is None:
         episodes = range(len(bag_files))
+
+    def add_frame_with_task(frame: dict):
+        try:
+            dataset.add_frame(frame, task=task)
+        except TypeError as exc:
+            if "unexpected keyword argument 'task'" not in str(exc):
+                raise
+            frame["task"] = task
+            dataset.add_frame(frame)
     
     failed_bags = []
     log_print.info(f"Total episodes to process: {len(episodes)}")
@@ -389,8 +398,7 @@ def populate_dataset_chunked(
                 
                 # 将所有缓存的帧添加到dataset
                 for frame in frames_buffer:
-                    frame["task"] = task
-                    dataset.add_frame(frame)
+                    add_frame_with_task(frame)
                 
                 # 清空buffer并释放内存
                 frames_buffer.clear()
@@ -409,7 +417,7 @@ def populate_dataset_chunked(
             # 处理剩余的帧
             if len(frames_buffer) > 0:
                 for frame in frames_buffer:
-                    dataset.add_frame(frame, task=task)
+                    add_frame_with_task(frame)
             dataset.save_episode()
             dataset.hf_dataset = dataset.create_hf_dataset()
             frames_buffer.clear()
@@ -567,8 +575,6 @@ def main(cfg: DictConfig):
 if __name__ == "__main__":
     np.random.seed(42)
     main()
-
-
 
 
 

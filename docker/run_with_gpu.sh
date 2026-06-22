@@ -1,7 +1,7 @@
 #!/bin/bash
 
-IMAGE_NAME="kdc_v0"
-CONTAINER_NAME="kdc_v0"
+IMAGE_NAME="kdc_task1_act_smoke"
+CONTAINER_NAME="kdc_task1_act_smoke"
 IMAGE_TAR="${IMAGE_NAME}.tar"   # 镜像文件路径
 
 # 如果容器存在，先删除
@@ -29,8 +29,8 @@ fi
 # 创建并启动新的容器
 docker run --gpus all -it \
     --net=host \
-    -e ROS_MASTER_URI=http://127.0.0.1:11311 \
-    -e ROS_IP=127.0.0.1 \
+    -e ROS_MASTER_URI=http://kuavo_master:11311 \
+    -e ROS_IP=192.168.26.10 \
+    -e KDC_CONFIG=configs/deploy/kuavo_real_task1_act_smoke.yaml \
     --name ${CONTAINER_NAME} \
     ${IMAGE_NAME} bash
-

@@ -55,11 +55,26 @@ class CustomACTConfigWrapper(ACTConfig):
 
     @property
     def image_features(self) -> dict[str, PolicyFeature]:
-        return {key: ft for key, ft in self.input_features.items() if (ft.type is FeatureType.RGB) or (ft.type is FeatureType.VISUAL)}
+        image_types = {FeatureType.VISUAL}
+        rgb_type = getattr(FeatureType, "RGB", None)
+        if rgb_type is not None:
+            image_types.add(rgb_type)
+        return {
+            key: ft
+            for key, ft in self.input_features.items()
+            if ft.type in image_types or getattr(ft.type, "value", ft.type) in {"RGB", "VISUAL"}
+        }
     
     @property
     def depth_features(self) -> dict[str, PolicyFeature]:
-        return {key: ft for key, ft in self.input_features.items() if ft.type is FeatureType.DEPTH}
+        depth_type = getattr(FeatureType, "DEPTH", None)
+        if depth_type is None:
+            return {}
+        return {
+            key: ft
+            for key, ft in self.input_features.items()
+            if ft.type is depth_type or getattr(ft.type, "value", ft.type) == "DEPTH"
+        }
     
 
     def validate_features(self) -> None:

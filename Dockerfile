@@ -17,7 +17,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # 安装 Miniforge
-ENV MINIFORGE_URL="https://mirrors.tuna.tsinghua.edu.cn/github-release/conda-forge/miniforge/Release%2025.3.1-0/Miniforge3-25.3.1-0-Linux-x86_64.sh"
+ENV MINIFORGE_URL="https://github.com/conda-forge/miniforge/releases/download/25.3.1-0/Miniforge3-25.3.1-0-Linux-x86_64.sh"
 RUN curl -L ${MINIFORGE_URL} -o /tmp/miniforge.sh \
     && bash /tmp/miniforge.sh -b -p /opt/conda \
     && rm /tmp/miniforge.sh
@@ -44,9 +44,14 @@ RUN if [ -f "myenv.tar.gz" ]; then \
         conda-unpack && \
         pip install -e . && \
         cd ./third_party/lerobot && pip install -e . && \
+        pip install deprecated==1.3.1 kuavo_humanoid_sdk==1.3.3 opencv-python==4.12.0.88 opencv-python-headless==4.12.0.88 numpy==2.2.6 && \
         conda clean -afy && \
         rm -rf ./myenv/lib/python*/site-packages/*/tests ./myenv/lib/python*/site-packages/*/test ./myenv/pkgs/* \
     "
+
+RUN mkdir -p /root/.cache/torch/hub/checkpoints && \
+    curl -L https://download.pytorch.org/models/resnet18-f37072fd.pth \
+    -o /root/.cache/torch/hub/checkpoints/resnet18-f37072fd.pth
 
 # =========================
 # Stage 2: Final
@@ -59,6 +64,7 @@ WORKDIR /root/kuavo_data_challenge
 # 复制 Conda 环境和项目代码
 COPY --from=builder /opt/conda /opt/conda
 COPY --from=builder /root/kuavo_data_challenge /root/kuavo_data_challenge
+COPY --from=builder /root/.cache/torch/hub/checkpoints /root/.cache/torch/hub/checkpoints
 
 # 环境变量
 ENV PATH="/opt/conda/bin:${PATH}"
@@ -68,12 +74,18 @@ ENV LC_ALL=C.UTF-8
 RUN apt-get update && apt-get install -y \
     ros-noetic-cv-bridge \
     ros-noetic-apriltag-ros \
+    libgl1 \
+    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # 保留 ROS 环境变量
+ENV ROS_MASTER_URI=http://kuavo_master:11311
+ENV ROS_IP=192.168.26.10
+
 # 激活 Conda 环境
 RUN echo "source /opt/ros/noetic/setup.bash" >> /root/.bashrc && \
-    echo "source /root/kuavo_data_challenge/myenv/bin/activate" >> /root/.bashrc
+    echo "source /root/kuavo_data_challenge/myenv/bin/activate" >> /root/.bashrc && \
+    chmod 777 -R /root/kuavo_data_challenge/kuavo_deploy
 
 # 默认命令
 CMD ["bash"]
