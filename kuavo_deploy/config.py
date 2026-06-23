@@ -150,7 +150,7 @@ class ConfigEnv:
 @dataclass
 class ConfigInference:
     go_bag_path: str = ""
-    policy_type: str = "diffusion"  # 支持 diffusion, act 等
+    policy_type: str = "diffusion"  # 支持 diffusion, act, openpi 等
     eval_episodes: int = 1
     seed: int = 42
     start_seed: int = 42
@@ -161,13 +161,36 @@ class ConfigInference:
     epoch: int = 1
     max_episode_steps: int = 1000
     env_name: str = "Kuavo-Sim"
+    checkpoint_path: str = ""
+
+    # OpenPI policy-server settings. These are used only when policy_type == "openpi".
+    openpi_config_name: str = "pi05_kuavo_task1_zhuomian_50_lora"
+    openpi_prompt: str = "Task1 Desktop Parts Pick And Place"
+    openpi_server_host: str = "127.0.0.1"
+    openpi_server_port: int = 8000
+    openpi_python: str = ""
+    openpi_auto_start: bool = True
+    openpi_cuda_visible_devices: str = ""
+    openpi_action_horizon: int = 50
+    openpi_state_dim: int = 16
+    openpi_image_width: int = 848
+    openpi_image_height: int = 480
+    openpi_warmup_steps: int = 2
+    openpi_connect_timeout_s: float = 180.0
 
     def validate(self):
-        if self.policy_type not in ["diffusion", "act"]:
+        if self.policy_type not in ["diffusion", "act", "client", "openpi"]:
             # 若将来支持更多策略，请在此扩展
             raise ValueError(f"Unsupported policy_type '{self.policy_type}'")
         if self.device not in ["cuda", "cpu"]:
             raise ValueError("device must be 'cuda' or 'cpu'")
+        if self.policy_type == "openpi":
+            if not self.checkpoint_path:
+                raise ValueError("checkpoint_path must be set when policy_type is 'openpi'")
+            if self.openpi_action_horizon <= 0:
+                raise ValueError("openpi_action_horizon must be positive")
+            if self.openpi_server_port <= 0:
+                raise ValueError("openpi_server_port must be positive")
 
 
 # -----------------------

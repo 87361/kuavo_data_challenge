@@ -53,6 +53,7 @@ import threading
 import traceback
 from geometry_msgs.msg import PoseStamped
 from kuavo_deploy.config import KuavoConfig
+from kuavo_deploy.openpi.policy_wrapper import IdentityProcessor, OpenPIChunkPolicyWrapper
 from kuavo_deploy.utils.logging_utils import setup_logger
 from kuavo_deploy.kuavo_service.client import PolicyClient
 from lerobot.policies.factory import make_pre_post_processors
@@ -124,7 +125,7 @@ def check_control_signals():
 
 
     
-def setup_policy(pretrained_path, policy_type, device=torch.device("cuda")):
+def setup_policy(pretrained_path, policy_type, device=torch.device("cuda"), cfg=None):
     """
     Set up and load the policy model.
     
@@ -146,15 +147,25 @@ def setup_policy(pretrained_path, policy_type, device=torch.device("cuda")):
         policy = CustomACTPolicyWrapper.from_pretrained(Path(pretrained_path),strict=True)
     elif policy_type == 'client':
         policy = PolicyClient()
+    elif policy_type == 'openpi':
+        if cfg is None:
+            raise ValueError("cfg is required when policy_type is 'openpi'")
+        policy = OpenPIChunkPolicyWrapper(cfg)
     else:
         raise ValueError(f"Unsupported policy type: {policy_type}")
     
-    policy.eval()
-    policy.to(device)
-    policy.reset()
+    if hasattr(policy, "eval"):
+        policy.eval()
+    if hasattr(policy, "to"):
+        policy.to(device)
+    if hasattr(policy, "reset"):
+        policy.reset()
     # Log model info
     log_model.info(f"Model loaded from {pretrained_path}")
-    log_model.info(f"Model n_obs_steps: {policy.config.n_obs_steps}")
+    if hasattr(policy, "config") and hasattr(policy.config, "n_obs_steps"):
+        log_model.info(f"Model n_obs_steps: {policy.config.n_obs_steps}")
+    elif policy_type == "openpi":
+        log_model.info(f"OpenPI action_horizon: {cfg.openpi_action_horizon}")
     log_model.info(f"Model device: {device}")
     
     return policy
@@ -180,7 +191,7 @@ def run_single_episode(config, policy, preprocessor, postprocessor, episode, out
     start_service = rospy.ServiceProxy('/simulator/start', Trigger)
 
 
-    if cfg.policy_type != 'client':
+    if cfg.policy_type not in ('client', 'openpi'):
         log_model.info(f"policy.config.input_features: {policy.config.input_features}")
         log_robot.info(f"env.observation_space: {env.observation_space}")
         log_model.info(f"policy.config.output_features: {policy.config.output_features}")
@@ -325,8 +336,11 @@ def kuavo_eval_autotest(config: KuavoConfig):
     # Setup policy and environment (只加载一次)
     set_seed(seed)
     device = torch.device(cfg.device)
-    policy = setup_policy(pretrained_path, policy_type, device)
-    preprocessor, postprocessor = make_pre_post_processors(None, Path(str(pretrained_path).split("/epoch", 1)[0]))
+    policy = setup_policy(pretrained_path, policy_type, device, cfg)
+    if policy_type == "openpi":
+        preprocessor, postprocessor = IdentityProcessor(), IdentityProcessor()
+    else:
+        preprocessor, postprocessor = make_pre_post_processors(None, Path(str(pretrained_path).split("/epoch", 1)[0]))
     
     # first reset
     reset_service = rospy.ServiceProxy('/simulator/reset', Trigger)
@@ -410,4 +424,3 @@ def kuavo_eval_autotest(config: KuavoConfig):
     init_service.shutdown()
     pause_sub.unregister()
     stop_sub.unregister()
-

@@ -11,7 +11,7 @@ RUN sed -i 's/archive.ubuntu.com/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/source
 
 # 安装必要工具和ROS依赖
 RUN apt-get update && apt-get install -y \
-    curl wget gnupg2 lsb-release sudo ca-certificates build-essential bzip2 \
+    curl wget git gnupg2 lsb-release sudo ca-certificates build-essential bzip2 \
     ros-noetic-cv-bridge \
     ros-noetic-apriltag-ros \
     && rm -rf /var/lib/apt/lists/*
@@ -44,9 +44,20 @@ RUN if [ -f "myenv.tar.gz" ]; then \
         conda-unpack && \
         pip install -e . && \
         cd ./third_party/lerobot && pip install -e . && \
-        pip install deprecated==1.3.1 kuavo_humanoid_sdk==1.3.3 opencv-python==4.12.0.88 opencv-python-headless==4.12.0.88 numpy==2.2.6 && \
+        pip install deprecated==1.3.1 kuavo_humanoid_sdk==1.3.3 opencv-python==4.12.0.88 opencv-python-headless==4.12.0.88 numpy==2.2.6 msgpack==1.1.2 websockets==15.0.1 && \
         conda clean -afy && \
         rm -rf ./myenv/lib/python*/site-packages/*/tests ./myenv/lib/python*/site-packages/*/test ./myenv/pkgs/* \
+    "
+
+RUN /bin/bash -c "\
+        source /opt/conda/etc/profile.d/conda.sh && \
+        mamba create -y -n openpi python=3.11 && \
+        conda activate openpi && \
+        python -m pip install -U pip uv && \
+        cd /root/kuavo_data_challenge/third_party/openpi && \
+        UV_PROJECT_ENVIRONMENT=/opt/conda/envs/openpi uv sync --frozen --no-dev && \
+        conda clean -afy && \
+        rm -rf /root/.cache/uv \
     "
 
 RUN mkdir -p /root/.cache/torch/hub/checkpoints && \
@@ -70,6 +81,7 @@ COPY --from=builder /root/.cache/torch/hub/checkpoints /root/.cache/torch/hub/ch
 ENV PATH="/opt/conda/bin:${PATH}"
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
+ENV OPENPI_PYTHON=/opt/conda/envs/openpi/bin/python
 
 RUN apt-get update && apt-get install -y \
     ros-noetic-cv-bridge \

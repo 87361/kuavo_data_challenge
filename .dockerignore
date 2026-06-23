@@ -8,16 +8,20 @@ __pycache__/
 *.bag
 *.tar
 *.tar.gz
+*.zip
 !myenv.tar.gz
 
 .codex_backups/
 kuavo_data/task1_trans/
 datasets/
 data/
+third_party/openpi/.venv/
+third_party/openpi/assets/
+third_party/openpi/checkpoints/
+third_party/openpi/logs/
 
 outputs/**
-!outputs/train/
-!outputs/train/task1_zhuomian/
-!outputs/train/task1_zhuomian/act_real50_smoke/
-!outputs/train/task1_zhuomian/act_real50_smoke/run_real50_15ep_20260622_135333/
-!outputs/train/task1_zhuomian/act_real50_smoke/run_real50_15ep_20260622_135333/**
+!outputs/openpi/
+!outputs/openpi/pi05_kuavo_task1_zhuomian_50_lora/
+!outputs/openpi/pi05_kuavo_task1_zhuomian_50_lora/5000/
+!outputs/openpi/pi05_kuavo_task1_zhuomian_50_lora/5000/**
