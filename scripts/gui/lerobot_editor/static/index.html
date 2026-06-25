@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LeRobot Editor</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main id="appShell" class="app-shell">
+      <header class="topbar">
+        <div class="brand">LeRobot Editor</div>
+        <select id="datasetSelect" class="field dataset-field"></select>
+        <button id="loadDataset" class="primary">Load</button>
+        <select id="episodeSelect" class="field episode-field"></select>
+        <div id="statusText" class="status">Idle</div>
+      </header>
+
+      <section id="viewer" class="viewer">
+        <div id="videoGrid" class="video-grid"></div>
+        <div id="viewerResizeHandle" class="pane-resize-handle vertical" title="Resize panels"></div>
+        <aside class="side-panel">
+          <div class="inspector">
+            <div class="metric">
+              <span>Dataset</span>
+              <strong id="datasetName">-</strong>
+            </div>
+            <div class="metric">
+              <span>Episode</span>
+              <strong id="episodeMetric">-</strong>
+            </div>
+            <div class="metric">
+              <span>Frame</span>
+              <strong id="frameMetric">-</strong>
+            </div>
+            <div class="metric">
+              <span>Time</span>
+              <strong id="timeMetric">-</strong>
+            </div>
+            <div class="metric">
+              <span>Segment</span>
+              <strong id="segmentMetric">-</strong>
+            </div>
+          </div>
+          <div class="analysis-panel">
+            <div class="panel-title">Coverage Analysis</div>
+            <label class="analysis-field">
+              <span>Window</span>
+              <input id="analysisWindow" class="field" type="number" min="0.1" step="0.1" value="1" />
+            </label>
+            <label class="analysis-field">
+              <span>K</span>
+              <input id="analysisK" class="field" value="auto" />
+            </label>
+            <button id="runAnalysis" class="primary">Analyze</button>
+            <div id="analysisStatus" class="analysis-status">Not run</div>
+            <div id="clusterLegend" class="cluster-legend"></div>
+          </div>
+        </aside>
+      </section>
+
+      <section class="transport">
+        <button id="prevFrame" title="Previous frame">|&lt;</button>
+        <button id="playPause" title="Play or pause">Play</button>
+        <button id="nextFrame" title="Next frame">&gt;|</button>
+        <button id="cutFrame" title="Cut at playhead">Cut</button>
+        <button id="deleteSegment" title="Delete selected segment">Delete</button>
+        <button id="undoEdit" title="Undo">Undo</button>
+        <button id="redoEdit" title="Redo">Redo</button>
+        <input id="urdfPath" class="field urdf-field" placeholder="URDF path" title="URDF path for adaptive smoothing" />
+        <input id="exportPath" class="field export-field" />
+        <button id="exportDataset" class="primary">Export</button>
+      </section>
+
+      <div id="mainResizeHandle" class="main-resize-handle" title="Resize video and curves"></div>
+
+      <section class="timeline-wrap">
+        <div class="timeline-toolbar">
+          <button id="zoomOut" title="Zoom out">-</button>
+          <input id="zoomSlider" class="zoom-slider" type="range" min="1" max="24" step="0.25" value="1" title="Timeline zoom" />
+          <button id="zoomIn" title="Zoom in">+</button>
+          <button id="zoomReset" title="Reset zoom">1x</button>
+          <select id="curveGroup" class="field curve-group" title="Joint group">
+            <option value="left">Left 7</option>
+            <option value="right">Right 7</option>
+            <option value="arms">Arms 14</option>
+            <option value="all">All</option>
+          </select>
+          <input id="curveScale" class="curve-scale" type="range" min="0.5" max="4" step="0.1" value="1" title="Curve vertical zoom" />
+        </div>
+        <div id="timelineScroll" class="timeline-scroll">
+          <div id="timeline" class="timeline"></div>
+        </div>
+        <div id="curveResizeHandle" class="curve-resize-handle" title="Resize timeline and curves"></div>
+        <div id="curveScroll" class="curve-scroll">
+          <canvas id="curveCanvas" class="curve-canvas"></canvas>
+        </div>
+      </section>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

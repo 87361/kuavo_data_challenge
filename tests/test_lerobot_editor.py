@@ -1,0 +1,329 @@
+from __future__ import annotations
+
+import json
+import sys
+import time
+from pathlib import Path
+
+import av
+import numpy as np
+import pandas as pd
+import pyarrow.parquet as pq
+from fastapi.testclient import TestClient
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.gui.lerobot_editor.analysis import compute_coverage_analysis
+from scripts.gui.lerobot_editor.dataset import find_lerobot_datasets, load_v21_dataset
+from scripts.gui.lerobot_editor.edits import build_segments, kept_ranges, transition_frame_count
+from scripts.gui.lerobot_editor.exporter import export_v21_dataset
+from scripts.gui.lerobot_editor.server import app, state
+from scripts.gui.lerobot_editor.urdf_fk import SimpleArmFk
+
+
+def write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+
+def write_jsonl(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row) + "\n")
+
+
+def make_test_urdf(path: Path) -> Path:
+    def chain(prefix: str, y: float) -> str:
+        parts = [
+            f'<joint name="zarm_{prefix}1_joint" type="revolute"><origin xyz="0 {y} 0" rpy="0 0 0"/><parent link="base_link"/><child link="zarm_{prefix}1_link"/><axis xyz="0 1 0"/></joint>'
+        ]
+        for idx in range(2, 8):
+            parent = f"zarm_{prefix}{idx - 1}_link"
+            child = f"zarm_{prefix}{idx}_link"
+            axis = "1 0 0" if idx in {2, 6} else ("0 0 1" if idx in {3, 5} else "0 1 0")
+            parts.append(
+                f'<joint name="zarm_{prefix}{idx}_joint" type="revolute"><origin xyz="0 0 -0.1" rpy="0 0 0"/><parent link="{parent}"/><child link="{child}"/><axis xyz="{axis}"/></joint>'
+            )
+        parts.append(
+            f'<joint name="zarm_{prefix}7_end_effector_joint" type="fixed"><origin xyz="0 0 -0.2" rpy="0 0 0"/><parent link="zarm_{prefix}7_link"/><child link="zarm_{prefix}7_end_effector"/><axis xyz="0 0 0"/></joint>'
+        )
+        return "\n".join(parts)
+
+    links = ["base_link"]
+    for side in ["l", "r"]:
+        links.extend([f"zarm_{side}{idx}_link" for idx in range(1, 8)])
+        links.append(f"zarm_{side}7_end_effector")
+    path.write_text(
+        "<robot name='test'>"
+        + "".join(f"<link name='{link}'/>" for link in links)
+        + chain("l", 0.3)
+        + chain("r", -0.3)
+        + "</robot>",
+        encoding="utf-8",
+    )
+    return path
+
+
+def write_video(path: Path, frames: int = 5, size: tuple[int, int] = (64, 48)) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with av.open(str(path), mode="w") as output:
+        stream = output.add_stream("mpeg4", rate=10)
+        stream.width = size[0]
+        stream.height = size[1]
+        stream.pix_fmt = "yuv420p"
+        for idx in range(frames):
+            image = np.zeros((size[1], size[0], 3), dtype=np.uint8)
+            image[..., 0] = idx * 30
+            image[..., 1] = 120
+            image[..., 2] = 220 - idx * 20
+            frame = av.VideoFrame.from_ndarray(image, format="rgb24")
+            for packet in stream.encode(frame):
+                output.mux(packet)
+        for packet in stream.encode():
+            output.mux(packet)
+
+
+def make_v21_dataset(root: Path) -> Path:
+    info = {
+        "codebase_version": "v2.1",
+        "fps": 10,
+        "total_episodes": 1,
+        "total_frames": 5,
+        "total_videos": 1,
+        "chunks_size": 1000,
+        "total_chunks": 1,
+        "total_tasks": 1,
+        "splits": {"train": "0:1"},
+        "data_path": "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet",
+        "video_path": "videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4",
+        "features": {
+            "observation.state": {
+                "dtype": "float32",
+                "shape": [16],
+                "names": {"state_names": [f"j{i}" for i in range(16)]},
+            },
+            "action": {
+                "dtype": "float32",
+                "shape": [16],
+                "names": {"action_names": [f"j{i}" for i in range(16)]},
+            },
+            "observation.images.head_cam_h": {
+                "dtype": "video",
+                "shape": [3, 48, 64],
+                "names": ["channels", "height", "width"],
+                "info": {"video.fps": 10, "video.codec": "mpeg4"},
+            },
+            "timestamp": {"dtype": "float32", "shape": [1], "names": None},
+            "frame_index": {"dtype": "int64", "shape": [1], "names": None},
+            "episode_index": {"dtype": "int64", "shape": [1], "names": None},
+            "index": {"dtype": "int64", "shape": [1], "names": None},
+            "task_index": {"dtype": "int64", "shape": [1], "names": None},
+        },
+    }
+    write_json(root / "meta" / "info.json", info)
+    write_jsonl(root / "meta" / "tasks.jsonl", [{"task_index": 0, "task": "test"}])
+    write_jsonl(root / "meta" / "episodes.jsonl", [{"episode_index": 0, "tasks": ["test"], "length": 5}])
+    write_jsonl(root / "meta" / "episodes_stats.jsonl", [{"episode_index": 0, "stats": {}}])
+
+    rows = []
+    for idx in range(5):
+        vec = np.zeros(16, dtype=np.float32)
+        vec[0] = idx * 0.1
+        vec[8] = idx * 0.1
+        rows.append(
+            {
+                "observation.state": vec,
+                "action": vec.copy(),
+                "timestamp": idx / 10,
+                "frame_index": idx,
+                "episode_index": 0,
+                "index": idx,
+                "task_index": 0,
+            }
+        )
+    parquet_path = root / "data" / "chunk-000" / "episode_000000.parquet"
+    parquet_path.parent.mkdir(parents=True, exist_ok=True)
+    import pyarrow as pa
+
+    table = pa.Table.from_pydict(
+        {
+            "observation.state": [row["observation.state"].tolist() for row in rows],
+            "action": [row["action"].tolist() for row in rows],
+            "timestamp": [row["timestamp"] for row in rows],
+            "frame_index": [row["frame_index"] for row in rows],
+            "episode_index": [row["episode_index"] for row in rows],
+            "index": [row["index"] for row in rows],
+            "task_index": [row["task_index"] for row in rows],
+        }
+    )
+    pq.write_table(table, parquet_path, compression="snappy")
+    write_video(root / "videos" / "chunk-000" / "observation.images.head_cam_h" / "episode_000000.mp4")
+    return root
+
+
+def test_segments_and_ranges() -> None:
+    segments = build_segments(10, [3, 7], [1])
+    assert [(seg.start, seg.end, seg.deleted) for seg in segments] == [
+        (0, 3, False),
+        (3, 7, True),
+        (7, 10, False),
+    ]
+    assert kept_ranges(10, [3, 7], [1]) == [(0, 3), (7, 10)]
+    assert transition_frame_count(0.0) == 2
+    assert transition_frame_count(0.08, step_m=0.025) == 4
+    assert transition_frame_count(2.0, step_m=0.025) == 20
+
+
+def test_urdf_fk_positions(tmp_path: Path) -> None:
+    fk = SimpleArmFk(make_test_urdf(tmp_path / "test.urdf"))
+    left0, right0 = fk.state_positions(np.zeros(16, dtype=np.float32))
+    moved = np.zeros(16, dtype=np.float32)
+    moved[0] = 0.5
+    moved[8] = -0.5
+    left1, right1 = fk.state_positions(moved)
+    assert left0.shape == (3,)
+    assert right0.shape == (3,)
+    assert np.linalg.norm(left1 - left0) > 0
+    assert np.linalg.norm(right1 - right0) > 0
+
+
+def test_find_and_export_v21_dataset(tmp_path: Path) -> None:
+    source = make_v21_dataset(tmp_path / "dataset" / "task" / "lerobot")
+    urdf = make_test_urdf(tmp_path / "test.urdf")
+    found = find_lerobot_datasets(tmp_path)
+    assert len(found) == 1
+    assert found[0].editable is True
+
+    output = tmp_path / "out" / "task" / "lerobot"
+    manifest = export_v21_dataset(
+        source_root=source,
+        output_root=output,
+        edits={"0": {"cuts": [2, 4], "deleted_segments": [1]}},
+        urdf_path=urdf,
+        transition_step_m=100.0,
+        min_transition_frames=2,
+        max_transition_frames=2,
+        video_codec="mpeg4",
+    )
+    info = json.loads((output / "meta" / "info.json").read_text())
+    assert info["total_frames"] == 5
+    assert manifest["episodes"]["0"]["output_length"] == 5
+    table = pq.read_table(output / "data" / "chunk-000" / "episode_000000.parquet")
+    assert table.num_rows == 5
+    with av.open(str(output / "videos" / "chunk-000" / "observation.images.head_cam_h" / "episode_000000.mp4")) as container:
+        assert sum(1 for _ in container.decode(container.streams.video[0])) == 5
+    assert (output / "edit_manifest.json").exists()
+
+
+def test_export_without_urdf_uses_fixed_transition_frames(tmp_path: Path) -> None:
+    source = make_v21_dataset(tmp_path / "dataset" / "task" / "lerobot")
+    output = tmp_path / "out" / "task" / "lerobot"
+
+    manifest = export_v21_dataset(
+        source_root=source,
+        output_root=output,
+        edits={"0": {"cuts": [2, 4], "deleted_segments": [1]}},
+        urdf_path=None,
+        min_transition_frames=2,
+        max_transition_frames=20,
+        video_codec="mpeg4",
+    )
+
+    transition = manifest["episodes"]["0"]["transitions"][0]
+    assert manifest["urdf_path"] is None
+    assert manifest["transition"]["mode"] == "fixed_frame_count"
+    assert transition["eef_distance_m"] is None
+    assert transition["transition_frames"] == 2
+    assert (output / "meta" / "info.json").exists()
+
+
+def test_export_endpoint_accepts_urdf_path_from_request(tmp_path: Path) -> None:
+    source = make_v21_dataset(tmp_path / "dataset" / "task" / "lerobot")
+    urdf = make_test_urdf(tmp_path / "test.urdf")
+    output = tmp_path / "api_out" / "task" / "lerobot"
+    state.dataset = load_v21_dataset(source)
+    state.urdf_path = None
+    state.edits = {"0": {"cuts": [2, 4], "deleted_segments": [1]}}
+    state.export_job.status = "idle"
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/export",
+        json={"output_path": str(output), "urdf_path": str(urdf), "video_codec": "mpeg4"},
+    )
+
+    assert response.status_code == 200
+    for _ in range(40):
+        status = client.get("/api/export/status").json()
+        if status["status"] == "complete":
+            break
+        time.sleep(0.05)
+    assert status["status"] == "complete"
+    assert status["manifest"]["urdf_path"] == str(urdf.resolve())
+    assert status["manifest"]["transition"]["mode"] == "adaptive_eef_distance"
+
+
+def test_video_endpoint_serves_episode_video(tmp_path: Path) -> None:
+    source = make_v21_dataset(tmp_path / "dataset" / "task" / "lerobot")
+    state.dataset = load_v21_dataset(source)
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/video",
+        params={"episode_index": 0, "video_key": "observation.images.head_cam_h"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("video/")
+    assert response.content
+
+    range_response = client.get(
+        "/api/video",
+        params={"episode_index": 0, "video_key": "observation.images.head_cam_h"},
+        headers={"Range": "bytes=0-99"},
+    )
+    assert range_response.status_code == 206
+    assert range_response.headers["accept-ranges"] == "bytes"
+    assert range_response.headers["content-range"].startswith("bytes 0-99/")
+    assert len(range_response.content) == 100
+
+
+def test_coverage_analysis_clusters_joint_windows(tmp_path: Path) -> None:
+    source = make_v21_dataset(tmp_path / "dataset" / "task" / "lerobot")
+    dataset = load_v21_dataset(source)
+
+    auto = compute_coverage_analysis(dataset, window_seconds=0.2, cluster_count="auto")
+    assert auto["feature_indexes"] == [0, 1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13]
+    assert auto["auxiliary_indexes"] == [6, 7, 14, 15]
+    assert auto["cluster_count"] == len(auto["windows"])
+    assert all("cluster_proportions" in window for window in auto["windows"])
+
+    manual = compute_coverage_analysis(dataset, window_seconds=0.2, cluster_count=2)
+    assert manual["cluster_count"] == 2
+    assert len(manual["clusters"]) == 2
+    assert sum(cluster["window_count"] for cluster in manual["clusters"]) == len(manual["windows"])
+
+
+def test_coverage_analysis_endpoint(tmp_path: Path) -> None:
+    source = make_v21_dataset(tmp_path / "dataset" / "task" / "lerobot")
+    state.dataset = load_v21_dataset(source)
+    state.analysis_job.reset()
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/analysis/coverage",
+        json={"window_seconds": 0.2, "cluster_count": 2},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] in {"running", "complete"}
+    for _ in range(40):
+        status = client.get("/api/analysis/coverage/status").json()
+        if status["status"] == "complete":
+            break
+        time.sleep(0.05)
+    assert status["status"] == "complete"
+    assert status["result"]["cluster_count"] == 2
