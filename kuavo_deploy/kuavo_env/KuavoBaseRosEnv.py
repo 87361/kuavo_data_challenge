@@ -51,6 +51,7 @@ class KuavoBaseRosEnv(gym.Env):
         self.only_arm = config_kuavo_env.only_arm
         self.eef_type = config_kuavo_env.eef_type
         self.which_arm = config_kuavo_env.which_arm
+        self.policy_which_arm = getattr(config_kuavo_env, "policy_which_arm", None) or self.which_arm
         self.qiangnao_dof_needed = config_kuavo_env.qiangnao_dof_needed
 
         self.is_binary = config_kuavo_env.is_binary
@@ -82,13 +83,13 @@ class KuavoBaseRosEnv(gym.Env):
             grip_min, grip_max = limits['gripper']['min'], limits['gripper']['max']
         else:
             grip_min, grip_max = [], []
-        if self.which_arm == 'both':
+        if self.policy_which_arm == 'both':
             obs_low.extend(joint_min[:7]+grip_min[:1]+joint_min[7:14]+grip_min[1:2])
             obs_high.extend(joint_max[:7]+grip_max[:1]+joint_max[7:14]+grip_max[1:2])
-        if self.which_arm == 'left':
+        if self.policy_which_arm == 'left':
             obs_low.extend(joint_min[:7]+grip_min[:1])
             obs_high.extend(joint_max[:7]+grip_max[:1])
-        if self.which_arm == 'right':
+        if self.policy_which_arm == 'right':
             obs_low.extend(joint_min[7:14]+grip_min[1:2])
             obs_high.extend(joint_max[7:14]+grip_max[1:2])
 
@@ -302,17 +303,32 @@ class KuavoBaseRosEnv(gym.Env):
         #     else:
         #         fk_joint_angles = np.array([-10, 15, 25, -85, -90, 15, -20,   50, 0, 0, -140, 90, 0, 0])/180*np.pi
         #     return fk_joint_angles
-        if self.which_arm == 'both':
+        if self.policy_which_arm == 'both':
             return np.array(joint_q)
-        elif self.which_arm == 'left':
+        elif self.policy_which_arm == 'left':
             return np.concatenate((joint_q, self.arm_init[7:14]))
-        elif self.which_arm == 'right':
+        elif self.policy_which_arm == 'right':
             return np.concatenate((self.arm_init[:7], joint_q))
         else:
-            raise ValueError(f"Invalid which_arm: {self.which_arm}")
+            raise ValueError(f"Invalid policy_which_arm: {self.policy_which_arm}")
+
+    def _select_control_arm_action(self, action):
+        action = np.asarray(action, dtype=np.float64)
+        expected = len(self.action_space.low)
+        if len(action) == expected:
+            return action
+        if self.only_arm and len(action) == 16 and expected == 8:
+            if self.which_arm == "left":
+                log_robot.info("Received 16-dim policy action; using left-arm slice for single-arm deployment setting.")
+                return np.concatenate((action[:7], action[7:8]), axis=0)
+            if self.which_arm == "right":
+                log_robot.info("Received 16-dim policy action; using right-arm slice for single-arm deployment setting.")
+                return np.concatenate((action[8:15], action[15:16]), axis=0)
+        return action
     
     def check_action(self, action, mode='default'):
         if mode == 'default':  # 比较 action_space
+            action = self._select_control_arm_action(action)
             if len(action) != len(self.action_space.low):
                 raise ValueError(f"action shape must be {len(self.action_space.low)}")
             if np.any(action < self.action_space.low) or np.any(action > self.action_space.high):
@@ -359,7 +375,14 @@ class KuavoBaseRosEnv(gym.Env):
 
         # === 4. 执行动作 ===
         t2 = time.time()
-        self.cur_joint_angles_action = np.concatenate((action[:7], action[8:15]), axis=0)
+        if self.which_arm == 'both':
+            self.cur_joint_angles_action = np.concatenate((action[:7], action[8:15]), axis=0)
+        elif self.which_arm == 'left':
+            self.cur_joint_angles_action = np.concatenate((action[:7], self.arm_init[7:14]), axis=0)
+        elif self.which_arm == 'right':
+            self.cur_joint_angles_action = np.concatenate((self.arm_init[:7], action[:7]), axis=0)
+        else:
+            raise ValueError(f"Invalid which_arm: {self.which_arm}")
         self.exec_action(action)
 
         # === 5. 延时与观测 ===
@@ -490,15 +513,15 @@ class KuavoBaseRosEnv(gym.Env):
             if len(data) == 0:
                 continue
             mid = len(data) // 2
-            if self.which_arm == "both":
+            if self.policy_which_arm == "both":
                 arm_data["left"].append(data[:mid])
                 arm_data["right"].append(data[mid:])
-            elif self.which_arm == "left":
+            elif self.policy_which_arm == "left":
                 arm_data["left"].append(data)
-            elif self.which_arm == "right":
+            elif self.policy_which_arm == "right":
                 arm_data["right"].append(data)
             else:
-                raise KeyError(f"Unsupported which_arm: {self.which_arm}")
+                raise KeyError(f"Unsupported policy_which_arm: {self.policy_which_arm}")
 
         # 拼接结果
         obs["observation.state"] = np.concatenate(

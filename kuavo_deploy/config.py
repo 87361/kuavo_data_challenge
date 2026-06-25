@@ -49,6 +49,7 @@ class ConfigEnv:
     eef_type: str = "rq2f85"
     control_mode: str = "joint"
     which_arm: str = "both"
+    policy_which_arm: Optional[str] = None
     head_init: Optional[List[float]] = field(default_factory=lambda: [0.0, 0.0])
     use_delta: bool = False
     delta_type: str = "Tsub"  # "Tsub","Tinv","RPY"
@@ -73,6 +74,8 @@ class ConfigEnv:
             raise ValueError(f"Invalid eef_type: {self.eef_type}. Valid: rq2f85, leju_claw, qiangnao")
         if self.which_arm not in ["left", "right", "both"]:
             raise ValueError(f"Invalid which_arm: {self.which_arm}. Valid: left, right, both")
+        if self.policy_which_arm is not None and self.policy_which_arm not in ["left", "right", "both"]:
+            raise ValueError(f"Invalid policy_which_arm: {self.policy_which_arm}. Valid: left, right, both")
         if not isinstance(self.image_size, list) or len(self.image_size) != 2:
             raise ValueError("image_size must be a list [height, width]")
         # ensure lists lengths for arm bounds
@@ -84,12 +87,16 @@ class ConfigEnv:
 
     # -------- Derived properties ----------
     @property
+    def state_arm(self):
+        return self.policy_which_arm or self.which_arm
+
+    @property
     def joint_q_slice(self):
         return {
             "left": [[12, 19]],
             "right": [[19, 26]],
             "both": [[12, 19], [19, 26]]
-        }[self.which_arm]
+        }[self.state_arm]
 
     @property
     def gripper_slice(self):
@@ -98,13 +105,13 @@ class ConfigEnv:
                 "left": [[0, 1]],
                 "right": [[1, 2]],
                 "both": [[0, 1], [1, 2]]
-            }[self.which_arm]
+            }[self.state_arm]
         elif self.eef_type == "qiangnao" and self.qiangnao_dof_needed == 1:
             return {
                 "left": [[0, 1]],
                 "right": [[6, 7]],
                 "both": [[0, 1], [6, 7]]
-            }[self.which_arm]
+            }[self.state_arm]
         else:
             raise ValueError("Unsupported eef_type or dof config")
 
