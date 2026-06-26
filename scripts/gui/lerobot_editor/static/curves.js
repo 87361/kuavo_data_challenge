@@ -58,20 +58,49 @@ export function createCurveController(ctx) {
     return out;
   }
 
+  function gripperDimensionIndexes() {
+    const dims = state.curveCache?.dims || 0;
+    const payloadDims = state.episode?.gripper?.dimensions || [];
+    const fromPayload = payloadDims
+      .map((item) => Number(item.index))
+      .filter((index) => Number.isInteger(index) && index >= 0 && index < dims);
+    if (fromPayload.length) return Array.from(new Set(fromPayload));
+
+    const names = state.episode?.state_names || [];
+    const fromNames = names
+      .map((name, index) => ({ name: String(name || "").toLowerCase(), index }))
+      .filter((item) => item.index < dims && ["claw", "gripper", "finger"].some((marker) => item.name.includes(marker)))
+      .map((item) => item.index);
+    if (fromNames.length) return fromNames;
+    if (dims >= 16) return [7, 15];
+    if (dims >= 14) return [6, 13];
+    return [];
+  }
+
   function curveDimensionIndexes() {
     const dims = state.curveCache?.dims || 0;
     if (!dims) return [];
     const rightStart = dims >= 15 ? 8 : Math.min(7, dims);
-    if (state.curveGroup === "left") return rangeIndexes(0, 7, dims);
-    if (state.curveGroup === "right") return rangeIndexes(rightStart, 7, dims);
-    if (state.curveGroup === "arms") {
-      return [...rangeIndexes(0, 7, dims), ...rangeIndexes(rightStart, 7, dims)];
+    let selected = [];
+    if (state.curveGroup === "left") selected = rangeIndexes(0, 7, dims);
+    else if (state.curveGroup === "right") selected = rangeIndexes(rightStart, 7, dims);
+    else if (state.curveGroup === "arms") {
+      selected = [...rangeIndexes(0, 7, dims), ...rangeIndexes(rightStart, 7, dims)];
+    } else {
+      selected = rangeIndexes(0, dims, dims);
     }
-    return rangeIndexes(0, dims, dims);
+
+    const withGrippers = [...selected, ...gripperDimensionIndexes()];
+    return Array.from(new Set(withGrippers)).filter((index) => index >= 0 && index < dims);
   }
 
   function curveLabel(dim) {
     return state.episode?.state_names?.[dim] || `j${dim}`;
+  }
+
+  function gripperTransitionsForDims(dims) {
+    const allowed = new Set(dims);
+    return (state.episode?.gripper?.transitions || []).filter((transition) => allowed.has(Number(transition.dimension_index)));
   }
 
   function renderCurves() {
@@ -157,6 +186,24 @@ export function createCurveController(ctx) {
       if (segStart >= segEnd) continue;
       ctx2d.fillStyle = "rgba(239,107,115,0.18)";
       ctx2d.fillRect(xForBoundary(segStart), padT, Math.max(1, xForBoundary(segEnd) - xForBoundary(segStart)), plotH);
+    }
+
+    const gripperTransitions = gripperTransitionsForDims(dims);
+    for (const transition of gripperTransitions) {
+      const transitionStart = Math.max(Number(transition.start_frame) || 0, start);
+      const transitionEnd = Math.min((Number(transition.end_frame) || transitionStart) + 1, end);
+      if (transitionStart >= transitionEnd) continue;
+      const x = xForBoundary(transitionStart);
+      const w = Math.max(2 * ratio, xForBoundary(transitionEnd) - x);
+      const closing = transition.direction === "closing";
+      ctx2d.fillStyle = closing ? "rgba(239,107,115,0.22)" : "rgba(104,211,145,0.2)";
+      ctx2d.fillRect(x, padT, w, plotH);
+      ctx2d.strokeStyle = closing ? "rgba(239,107,115,0.78)" : "rgba(104,211,145,0.76)";
+      ctx2d.lineWidth = Math.max(1, 1.4 * ratio);
+      ctx2d.beginPath();
+      ctx2d.moveTo(x, padT);
+      ctx2d.lineTo(x, height - padB);
+      ctx2d.stroke();
     }
 
     const step = Math.max(1, Math.floor((end - start) / Math.max(1, visibleWidth / (2 * ratio))));

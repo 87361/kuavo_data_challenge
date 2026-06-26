@@ -444,6 +444,9 @@ def test_annotation_rating_notes_save_and_reopen(tmp_path: Path) -> None:
     assert saved["episode_annotations"]["1"]["rating"] == 10
     assert saved["episode_annotations"]["1"]["notes"] == ["good"]
     assert saved["note_labels"] == ["good"]
+    assert saved["annotation_stats"]["completed_count"] == 1
+    assert saved["annotation_stats"]["ratings"] == [{"rating": 10, "count": 1}]
+    assert saved["annotation_stats"]["labels"] == [{"label": "good", "count": 1}]
 
     reopened = client.post("/api/open", json={"path": str(source)}).json()
     annotation = reopened["progress"]["episode_annotations"]["1"]
@@ -452,6 +455,46 @@ def test_annotation_rating_notes_save_and_reopen(tmp_path: Path) -> None:
     assert annotation["notes"] == ["good"]
     episode = client.get("/api/episode/1").json()
     assert episode["annotation"]["rating"] == 10
+
+
+def test_episode_payload_marks_gripper_transitions(tmp_path: Path) -> None:
+    source = make_v21_dataset(tmp_path / "dataset" / "task" / "lerobot", frames_per_episode=6)
+    info_path = source / "meta" / "info.json"
+    info = json.loads(info_path.read_text())
+    info["features"]["observation.state"]["names"]["state_names"][7] = "left_claw"
+    info["features"]["observation.state"]["names"]["state_names"][15] = "right_claw"
+    write_json(info_path, info)
+
+    import pyarrow as pa
+
+    parquet_path = source / "data" / "chunk-000" / "episode_000000.parquet"
+    df = pq.read_table(parquet_path).to_pandas()
+    states = []
+    for idx, value in enumerate(df["observation.state"].tolist()):
+        vec = np.asarray(value, dtype=np.float32)
+        vec[7] = 0.0 if idx < 2 else (1.0 if idx < 4 else 0.0)
+        vec[15] = 0.0
+        states.append(vec.tolist())
+    df["observation.state"] = states
+    pq.write_table(pa.Table.from_pandas(df, preserve_index=False), parquet_path)
+
+    state.dataset = load_v21_dataset(source)
+    state.edits = {}
+    state.episode_annotations = {}
+    client = TestClient(app)
+
+    episode = client.get("/api/episode/0").json()
+    assert episode["gripper"]["dimensions"] == [
+        {"index": 7, "name": "left_claw", "side": "left"},
+        {"index": 15, "name": "right_claw", "side": "right"},
+    ]
+    assert [
+        (item["name"], item["direction"], item["start_frame"], item["end_frame"])
+        for item in episode["gripper"]["transitions"]
+    ] == [
+        ("left_claw", "closing", 1, 2),
+        ("left_claw", "opening", 3, 4),
+    ]
 
 
 def test_open_source_dataset_adopts_latest_legacy_workspace(tmp_path: Path) -> None:

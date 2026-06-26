@@ -3,10 +3,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import mimetypes
 import os
 import threading
-from collections import deque
+from collections import Counter, deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -41,6 +42,14 @@ except ImportError:  # pragma: no cover - direct script execution fallback
 
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+TRAJECTORY_PREVIEW_FORMAT_VERSION = "h264_browser_v1"
+DEFAULT_KUAVO_URDF_CANDIDATES = [
+    REPO_ROOT / "third_party/kuavo-ros-opensource-kdc/src/kuavo_assets/models/biped_s45/urdf/biped_s45.urdf",
+    REPO_ROOT / "third_party/kuavo-ros-opensource-kdc/src/data_challenge_simulator/models/biped_s45/urdf/biped_s45.urdf",
+    Path("/tmp/kuavo-ros-opensource-kdc/src/kuavo_assets/models/biped_s45/urdf/biped_s45.urdf"),
+    Path("/tmp/kuavo-ros-opensource-kdc/src/data_challenge_simulator/models/biped_s45/urdf/biped_s45.urdf"),
+]
 
 
 class OpenRequest(BaseModel):
@@ -220,6 +229,49 @@ def _utc_now() -> str:
 
 def _log(level: str, source: str, message: str, **fields: Any) -> None:
     state.app_logs.append(level, source, message, **fields)
+
+
+def _existing_path(value: str | Path | None) -> Path | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    path = Path(text).expanduser().resolve()
+    return path if path.exists() else None
+
+
+def _discover_default_kuavo_urdf() -> Path | None:
+    env_path = _existing_path(os.environ.get("KUAVO_URDF_PATH"))
+    if env_path is not None:
+        return env_path
+    for candidate in DEFAULT_KUAVO_URDF_CANDIDATES:
+        path = candidate.expanduser().resolve()
+        if path.exists():
+            return path
+    return None
+
+
+def _resolve_initial_urdf(value: str | None) -> Path | None:
+    if value and value.strip():
+        return Path(value).expanduser().resolve()
+    return _discover_default_kuavo_urdf()
+
+
+def _resolve_trajectory_urdf(requested_value: str | None) -> tuple[Path | None, str | None]:
+    requested = requested_value.strip() if requested_value else ""
+    if requested:
+        path = Path(requested).expanduser().resolve()
+        if not path.exists():
+            return None, f"Set a valid URDF path; path does not exist: {path}"
+        return path, None
+    if state.urdf_path is not None and state.urdf_path.exists():
+        return state.urdf_path, None
+    default_path = _discover_default_kuavo_urdf()
+    if default_path is not None:
+        state.urdf_path = default_path
+        return default_path, None
+    return None, "Set a valid URDF path to generate the trajectory preview"
 
 
 def _read_json_file(path: Path) -> dict[str, Any]:
@@ -524,6 +576,55 @@ def _current_annotation(episode_index: int) -> dict[str, Any]:
     )
 
 
+def _annotation_stats(dataset: LeRobotV21Dataset) -> dict[str, Any]:
+    rating_counts: Counter[int] = Counter()
+    label_counts: Counter[str] = Counter()
+    completed_count = 0
+    annotated_count = 0
+    rated_count = 0
+    unlabeled_count = 0
+    unrated_count = 0
+
+    for episode_index in range(len(dataset.episodes)):
+        annotation = _current_annotation(episode_index)
+        if not _annotation_is_empty(annotation):
+            annotated_count += 1
+        if not annotation.get("completed"):
+            continue
+
+        completed_count += 1
+        rating = annotation.get("rating")
+        if isinstance(rating, int) and 1 <= rating <= 10:
+            rating_counts[rating] += 1
+            rated_count += 1
+        else:
+            unrated_count += 1
+
+        notes = _normalize_notes(annotation.get("notes"))
+        if notes:
+            for note in notes:
+                label_counts[note] += 1
+        else:
+            unlabeled_count += 1
+
+    return {
+        "total_episodes": len(dataset.episodes),
+        "completed_count": completed_count,
+        "annotated_count": annotated_count,
+        "rated_count": rated_count,
+        "unrated_count": unrated_count,
+        "unlabeled_count": unlabeled_count,
+        "ratings": [
+            {"rating": rating, "count": rating_counts[rating]}
+            for rating in sorted(rating_counts)
+        ],
+        "labels": [
+            {"label": label, "count": count}
+            for label, count in sorted(label_counts.items(), key=lambda item: (-item[1], item[0]))
+        ],
+    }
+
+
 def _progress_payload(dataset: LeRobotV21Dataset) -> dict[str, Any]:
     pending_export_episodes = _pending_export_episodes(dataset)
     _sync_completed_from_annotations()
@@ -545,6 +646,7 @@ def _progress_payload(dataset: LeRobotV21Dataset) -> dict[str, Any]:
         "pending_export_episodes": pending_export_episodes,
         "pending_export_count": len(pending_export_episodes),
         "total_episodes": len(dataset.episodes),
+        "annotation_stats": _annotation_stats(dataset),
         "active_workspace_path": str(active_workspace) if active_workspace else None,
         "default_export_path": str(_default_workspace_path(canonical)),
         "last_export_path": str(active_workspace) if active_workspace else state.last_export_path,
@@ -623,6 +725,138 @@ def _save_progress(dataset: LeRobotV21Dataset) -> dict[str, Any]:
     return payload
 
 
+GRIPPER_NAME_MARKERS = ("claw", "gripper", "finger")
+
+
+def _gripper_side(name: str, index: int) -> str:
+    lower = name.lower()
+    if "left" in lower or "_l" in lower or lower.endswith("_l") or index in {6, 7}:
+        return "left"
+    if "right" in lower or "_r" in lower or lower.endswith("_r") or index in {13, 15}:
+        return "right"
+    return "gripper"
+
+
+def _gripper_dimensions(names: list[str], dim_count: int) -> list[dict[str, Any]]:
+    dimensions: list[dict[str, Any]] = []
+    for index in range(min(dim_count, len(names))):
+        name = names[index] or f"j{index}"
+        if any(marker in name.lower() for marker in GRIPPER_NAME_MARKERS):
+            dimensions.append({"index": index, "name": name, "side": _gripper_side(name, index)})
+    if dimensions:
+        return dimensions
+    if dim_count >= 16:
+        return [
+            {"index": 7, "name": names[7] if len(names) > 7 and names[7] else "left_claw", "side": "left"},
+            {"index": 15, "name": names[15] if len(names) > 15 and names[15] else "right_claw", "side": "right"},
+        ]
+    if dim_count >= 14:
+        return [
+            {"index": 6, "name": names[6] if len(names) > 6 and names[6] else "left_gripper", "side": "left"},
+            {"index": 13, "name": names[13] if len(names) > 13 and names[13] else "right_gripper", "side": "right"},
+        ]
+    return []
+
+
+def _curve_dim_count(df: Any, key: str) -> int:
+    if key not in df or len(df) == 0:
+        return 0
+    first = df[key].iloc[0]
+    try:
+        return len(first)
+    except TypeError:
+        return 1
+
+
+def _numeric_series(df: Any, key: str, index: int) -> list[float]:
+    values: list[float] = []
+    if key not in df:
+        return values
+    for value in df[key].tolist():
+        try:
+            raw = value[index]
+        except (TypeError, IndexError, KeyError):
+            raw = 0.0
+        try:
+            number = float(raw)
+        except (TypeError, ValueError):
+            number = 0.0
+        values.append(number if math.isfinite(number) else 0.0)
+    return values
+
+
+def _detect_gripper_transitions(values: list[float], dimension: dict[str, Any]) -> list[dict[str, Any]]:
+    if len(values) < 2:
+        return []
+    value_min = min(values)
+    value_max = max(values)
+    value_range = value_max - value_min
+    if value_range < 0.05:
+        return []
+
+    threshold = max(value_range * 0.01, 1e-3)
+    min_transition_delta = max(value_range * 0.2, 0.05)
+    moving = [
+        index
+        for index in range(1, len(values))
+        if abs(values[index] - values[index - 1]) >= threshold
+    ]
+    if not moving:
+        return []
+
+    runs: list[tuple[int, int]] = []
+    run_start = moving[0]
+    run_end = moving[0]
+    for frame_index in moving[1:]:
+        if frame_index <= run_end + 1:
+            run_end = frame_index
+            continue
+        runs.append((run_start, run_end))
+        run_start = frame_index
+        run_end = frame_index
+    runs.append((run_start, run_end))
+
+    transitions: list[dict[str, Any]] = []
+    for start_diff, end_diff in runs:
+        start_frame = max(0, start_diff - 1)
+        end_frame = min(len(values) - 1, end_diff)
+        start_value = values[start_frame]
+        end_value = values[end_frame]
+        delta = end_value - start_value
+        if abs(delta) < min_transition_delta:
+            continue
+        transitions.append(
+            {
+                "dimension_index": int(dimension["index"]),
+                "name": str(dimension["name"]),
+                "side": str(dimension["side"]),
+                "start_frame": int(start_frame),
+                "end_frame": int(end_frame),
+                "frame": int(round((start_frame + end_frame) / 2)),
+                "direction": "closing" if delta > 0 else "opening",
+                "start_value": round(float(start_value), 6),
+                "end_value": round(float(end_value), 6),
+            }
+        )
+    return transitions
+
+
+def _episode_gripper_payload(dataset: LeRobotV21Dataset, df: Any) -> dict[str, Any]:
+    source = "observation.state"
+    dim_count = _curve_dim_count(df, source)
+    dimensions = _gripper_dimensions(dataset.state_names, dim_count)
+    transitions: list[dict[str, Any]] = []
+    for dimension in dimensions:
+        transitions.extend(_detect_gripper_transitions(_numeric_series(df, source, int(dimension["index"])), dimension))
+    transitions.sort(key=lambda item: (item["start_frame"], item["dimension_index"]))
+    return {
+        "source": source,
+        "dimensions": dimensions,
+        "transitions": transitions,
+        "transition_count": len(transitions),
+    }
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
@@ -667,6 +901,8 @@ def api_open(req: OpenRequest) -> dict[str, Any]:
     _load_progress(dataset)
     state.analysis_job.reset()
     state.trajectory_job.reset()
+    if state.urdf_path is None:
+        state.urdf_path = _discover_default_kuavo_urdf()
     _log("info", "dataset", f"Opened dataset {canonical}")
     return {
         "path": str(canonical),
@@ -711,6 +947,7 @@ def api_episode(episode_index: int) -> dict[str, Any]:
             "observation.state": dataframe_to_curve_payload(df, "observation.state"),
             "action": dataframe_to_curve_payload(df, "action"),
         },
+        "gripper": _episode_gripper_payload(dataset, df),
         "annotation": _current_annotation(episode_index),
         "cuts": edit["cuts"],
         "deleted_segments": edit["deleted_segments"],
@@ -932,6 +1169,7 @@ def _trajectory_cache_name(
         "video_key": video_key,
         "source": source,
         "hand": hand,
+        "format_version": TRAJECTORY_PREVIEW_FORMAT_VERSION,
         "edit": edit,
     }
     digest = hashlib.sha1(json.dumps(fingerprint, sort_keys=True).encode("utf-8")).hexdigest()[:16]
@@ -991,10 +1229,9 @@ def _prepare_trajectory_preview(episode_index: int, req: TrajectoryPreviewReques
     if req.hand not in {"auto", "left", "right", "both"}:
         raise HTTPException(status_code=400, detail="hand must be auto, left, right, or both")
 
-    requested_urdf = req.urdf_path.strip() if req.urdf_path else ""
-    urdf_path = Path(requested_urdf).expanduser().resolve() if requested_urdf else state.urdf_path
-    if urdf_path is None or not urdf_path.exists():
-        message = "Set a valid URDF path to generate the trajectory preview"
+    urdf_path, urdf_error = _resolve_trajectory_urdf(req.urdf_path)
+    if urdf_path is None:
+        message = urdf_error or "Set a valid URDF path to generate the trajectory preview"
         state.trajectory_job.update(
             status="failed",
             message=message,
@@ -1088,7 +1325,7 @@ def _run_trajectory_preview(context: dict[str, Any]) -> None:
             fps=None,
             max_frames=None,
             camera_left=False,
-            codec="mp4v",
+            codec="h264",
         )
         render_video(dataset, args, left, right, progress=progress)
         result = _trajectory_result(output_path, cached=False)
@@ -1186,7 +1423,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     state.data_root = Path(args.data_root).expanduser().resolve()
-    state.urdf_path = Path(args.urdf).expanduser().resolve() if args.urdf else None
+    state.urdf_path = _resolve_initial_urdf(args.urdf)
     state.transition_step_m = args.transition_step_m
     state.min_transition_frames = args.min_transition_frames
     state.max_transition_frames = args.max_transition_frames

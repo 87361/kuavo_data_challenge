@@ -28,8 +28,9 @@ except ImportError:  # pragma: no cover - direct script execution fallback
     from urdf_fk import SimpleArmFk
 
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_DATASET = Path("/mnt/data/kuavo_tianchi/lerobot_v21_task1_full/task1_zhuomian/lerobot")
-DEFAULT_URDF = Path("/tmp/kuavo-ros-opensource-kdc/src/kuavo_assets/models/biped_s45/urdf/biped_s45.urdf")
+DEFAULT_URDF = REPO_ROOT / "third_party/kuavo-ros-opensource-kdc/src/kuavo_assets/models/biped_s45/urdf/biped_s45.urdf"
 DEFAULT_OUTPUT = Path("/tmp/kuavo_eef_trajectory_episode_000000.png")
 
 

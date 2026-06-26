@@ -1,4 +1,4 @@
-import { clamp, formatSavedAt } from "./utils.js";
+import { STORAGE, clamp, formatSavedAt } from "./utils.js";
 
 export function createProgressController(ctx) {
   const { state, els, api, setStatus } = ctx;
@@ -47,6 +47,47 @@ export function createProgressController(ctx) {
     }
   }
 
+  function renderSummaryChips(container, items, emptyText, renderText) {
+    container.innerHTML = "";
+    if (!items.length) {
+      const chip = document.createElement("span");
+      chip.className = "summary-chip empty";
+      chip.textContent = emptyText;
+      container.appendChild(chip);
+      return;
+    }
+    for (const item of items) {
+      const chip = document.createElement("span");
+      chip.className = "summary-chip";
+      chip.textContent = renderText(item);
+      container.appendChild(chip);
+    }
+  }
+
+  function renderAnnotationStats() {
+    const stats = state.progress?.annotation_stats || {};
+    const total = Number(stats.total_episodes || state.dataset?.total_episodes || 0);
+    const completed = Number(stats.completed_count || 0);
+    const rated = Number(stats.rated_count || 0);
+    const unlabeled = Number(stats.unlabeled_count || 0);
+    const unrated = Number(stats.unrated_count || 0);
+    els.annotationSummaryMain.textContent = `${completed} / ${total} complete · ${rated} scored`;
+    els.annotationSummaryMain.title = `Unrated completed: ${unrated}; completed without labels: ${unlabeled}`;
+
+    const ratings = Array.isArray(stats.ratings) ? stats.ratings : [];
+    const labels = Array.isArray(stats.labels) ? stats.labels : [];
+    const ratingItems = unrated > 0 ? [...ratings, { rating: "No score", count: unrated }] : ratings;
+    const labelItems = unlabeled > 0 ? [...labels, { label: "No label", count: unlabeled }] : labels;
+
+    renderSummaryChips(
+      els.annotationScoreStats,
+      ratingItems,
+      "No scores",
+      (item) => `${Number.isFinite(Number(item.rating)) ? `S${item.rating}` : item.rating}: ${item.count}`,
+    );
+    renderSummaryChips(els.annotationLabelStats, labelItems, "No labels", (item) => `${item.label}: ${item.count}`);
+  }
+
   function renderAnnotation() {
     const annotation = annotationFor();
     const rating = annotation.rating ?? null;
@@ -64,43 +105,75 @@ export function createProgressController(ctx) {
     });
   }
 
+  function clearTrajectoryVideo() {
+    if (!els.trajectoryVideo.hasAttribute("src")) return;
+    els.trajectoryVideo.removeAttribute("src");
+    els.trajectoryVideo.load();
+  }
+
+  function setTrajectoryVideo(url) {
+    if (els.trajectoryVideo.getAttribute("src") === url) return;
+    els.trajectoryVideo.src = url;
+  }
+
+  function trajectoryJobEpisode(job) {
+    const index = Number(job?.params?.episode_index);
+    return Number.isFinite(index) ? index : null;
+  }
+
+  function trajectoryJobResult(job) {
+    return job?.result || (job?.url ? job : null);
+  }
+
   function renderTrajectoryPreview() {
     const job = state.trajectoryJob;
-    if (job?.params?.episode_index === state.episodeIndex && job.status === "running") {
-      els.trajectoryVideo.removeAttribute("src");
-      els.trajectoryVideo.load();
+    const jobEpisode = trajectoryJobEpisode(job);
+    const running = job?.status === "running";
+    const preview = state.trajectoryPreview?.episodeIndex === state.episodeIndex
+      ? state.trajectoryPreview
+      : null;
+
+    els.generateTrajectory.disabled = !state.episode || !(state.episode.video_keys || []).length || running;
+    els.generateTrajectory.textContent = running ? "Generating..." : "Generate";
+
+    if (running) {
+      if (jobEpisode === state.episodeIndex || !preview?.url) clearTrajectoryVideo();
+      if (preview?.url && jobEpisode !== state.episodeIndex) setTrajectoryVideo(preview.url);
       const pct = Math.round((Number(job.progress) || 0) * 100);
       els.trajectoryProgressBar.style.width = `${pct}%`;
-      els.trajectoryStatus.textContent = `${pct}% ${job.message || "Generating preview"}`;
+      const label = jobEpisode === state.episodeIndex || jobEpisode === null
+        ? ""
+        : ` for episode ${jobEpisode + 1}`;
+      els.trajectoryStatus.textContent = `${pct}% ${job.message || "Generating preview"}${label}`;
       return;
     }
-    if (job?.params?.episode_index === state.episodeIndex && job.status === "failed") {
+    if (jobEpisode === state.episodeIndex && job?.status === "failed") {
       els.trajectoryProgressBar.style.width = "100%";
-      els.trajectoryVideo.removeAttribute("src");
-      els.trajectoryVideo.load();
+      clearTrajectoryVideo();
       els.trajectoryStatus.textContent = job.error || job.message || "Trajectory preview failed";
       return;
     }
     if (!state.episode) {
-      els.trajectoryVideo.removeAttribute("src");
-      els.trajectoryVideo.load();
+      clearTrajectoryVideo();
       els.trajectoryProgressBar.style.width = "0%";
       els.trajectoryStatus.textContent = "No episode loaded";
       return;
     }
-    const preview = state.trajectoryPreview;
-    if (preview?.episodeIndex === state.episodeIndex && preview.url) {
-      els.trajectoryVideo.src = preview.url;
+    if (!(state.episode.video_keys || []).length) {
+      clearTrajectoryVideo();
+      els.trajectoryProgressBar.style.width = "0%";
+      els.trajectoryStatus.textContent = "No camera video available for this episode";
+      return;
+    }
+    if (preview?.url) {
+      setTrajectoryVideo(preview.url);
       els.trajectoryProgressBar.style.width = "100%";
       els.trajectoryStatus.textContent = preview.cached ? "Cached preview" : "Preview ready";
       return;
     }
-    els.trajectoryVideo.removeAttribute("src");
-    els.trajectoryVideo.load();
+    clearTrajectoryVideo();
     els.trajectoryProgressBar.style.width = "0%";
-    els.trajectoryStatus.textContent = isCurrentEpisodeComplete()
-      ? "Preview not generated yet"
-      : "Mark an episode complete to generate a preview";
+    els.trajectoryStatus.textContent = "Click Generate to render a preview";
   }
 
   function renderProgress() {
@@ -117,6 +190,7 @@ export function createProgressController(ctx) {
     els.pendingExportMetric.textContent = String(pending);
     els.savedMetric.textContent = state.progressDirty ? "Unsaved" : formatSavedAt(progress.saved_at);
     els.progressStatus.textContent = state.progressDirty ? "Unsaved changes" : `Saved ${formatSavedAt(progress.saved_at)}`;
+    renderAnnotationStats();
 
     const complete = isCurrentEpisodeComplete();
     els.markComplete.textContent = complete ? "Unmark Complete" : "Mark Complete";
@@ -188,7 +262,7 @@ export function createProgressController(ctx) {
     };
   }
 
-  async function updateCurrentAnnotation(patch, { autosave = true, preview = false } = {}) {
+  async function updateCurrentAnnotation(patch, { autosave = true } = {}) {
     if (!state.episode) return;
     const body = currentFullAnnotation(patch);
     const payload = await api(`/api/annotations/episode/${state.episodeIndex}`, {
@@ -198,11 +272,6 @@ export function createProgressController(ctx) {
     state.progress = payload;
     state.episode.annotation = annotationFor(state.episodeIndex);
     markDirty({ autosave });
-    if (preview && body.completed) {
-      generateTrajectoryPreview().catch((error) => {
-        els.trajectoryStatus.textContent = error.message;
-      });
-    }
   }
 
   async function setCurrentRating(rating) {
@@ -228,7 +297,7 @@ export function createProgressController(ctx) {
 
   async function setEpisodeCompleted(episodeIndex, completed) {
     if (!state.episode || episodeIndex !== state.episodeIndex) return;
-    await updateCurrentAnnotation({ completed }, { preview: completed });
+    await updateCurrentAnnotation({ completed });
   }
 
   async function toggleCurrentComplete() {
@@ -246,36 +315,63 @@ export function createProgressController(ctx) {
 
   async function generateTrajectoryPreview() {
     if (!state.episode) return;
+    if (state.trajectoryJob?.status === "running") return;
+    if (!(state.episode.video_keys || []).length) {
+      throw new Error("No camera video available for trajectory preview");
+    }
+    const episodeIndex = state.episodeIndex;
     stopTrajectoryPolling();
+    if (state.trajectoryPreview?.episodeIndex === episodeIndex) state.trajectoryPreview = null;
     state.trajectoryJob = {
       status: "running",
       message: "Queued",
       progress: 0,
-      params: { episode_index: state.episodeIndex },
+      params: { episode_index: episodeIndex },
     };
     renderTrajectoryPreview();
     const videoKey = state.episode.video_keys.includes("observation.images.head_cam_h")
       ? "observation.images.head_cam_h"
       : state.episode.video_keys[0];
-    const job = await api(`/api/trajectory/episode/${state.episodeIndex}`, {
-      method: "POST",
-      body: JSON.stringify({
-        urdf_path: els.urdfPath.value.trim() || null,
-        video_key: videoKey,
-        source: "state",
-        hand: "auto",
-      }),
-    });
-    applyTrajectoryJob(job);
-    if (job.status === "running") {
-      state.trajectoryPoll = setInterval(() => {
-        pollTrajectoryStatus().catch((error) => {
-          stopTrajectoryPolling();
-          state.trajectoryJob = { status: "failed", error: error.message, params: { episode_index: state.episodeIndex } };
-          renderTrajectoryPreview();
-        });
-      }, 700);
-      await pollTrajectoryStatus();
+    const urdfPath = els.urdfPath.value.trim();
+    localStorage.setItem(STORAGE.urdfPath, urdfPath);
+    try {
+      const job = await api(`/api/trajectory/episode/${episodeIndex}`, {
+        method: "POST",
+        body: JSON.stringify({
+          urdf_path: urdfPath || null,
+          video_key: videoKey,
+          source: "state",
+          hand: "auto",
+        }),
+      });
+      applyTrajectoryJob(job);
+      if (job.status === "running") {
+        state.trajectoryPoll = setInterval(() => {
+          pollTrajectoryStatus().catch((error) => {
+            stopTrajectoryPolling();
+            state.trajectoryJob = {
+              status: "failed",
+              message: "trajectory preview failed",
+              progress: 1,
+              error: error.message,
+              params: { episode_index: episodeIndex },
+            };
+            renderTrajectoryPreview();
+          });
+        }, 700);
+        await pollTrajectoryStatus();
+      }
+    } catch (error) {
+      stopTrajectoryPolling();
+      state.trajectoryJob = {
+        status: "failed",
+        message: "trajectory preview failed",
+        progress: 1,
+        error: error.message,
+        params: { episode_index: episodeIndex },
+      };
+      renderTrajectoryPreview();
+      throw error;
     }
   }
 
@@ -292,14 +388,19 @@ export function createProgressController(ctx) {
       renderTrajectoryPreview();
       return;
     }
-    if (job.status === "complete" && job.url) {
+    if (!els.urdfPath.value.trim() && job.params?.urdf_path) {
+      els.urdfPath.value = job.params.urdf_path;
+      localStorage.setItem(STORAGE.urdfPath, job.params.urdf_path);
+    }
+    const result = trajectoryJobResult(job);
+    if (job.status === "complete" && result?.url) {
       state.trajectoryPreview = {
         episodeIndex: Number(job.params?.episode_index ?? state.episodeIndex),
-        url: job.url,
-        cached: Boolean(job.cached),
+        url: result.url,
+        cached: Boolean(result.cached),
       };
       stopTrajectoryPolling();
-    } else if (job.status === "failed") {
+    } else if (job.status === "complete" || job.status === "failed") {
       stopTrajectoryPolling();
     }
     renderTrajectoryPreview();

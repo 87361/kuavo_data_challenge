@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
@@ -78,7 +79,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fps", type=float, default=None, help="output FPS; defaults to dataset_fps / stride")
     parser.add_argument("--max-frames", type=int, default=None, help="limit output frames for quick previews")
     parser.add_argument("--camera-left", action="store_true", help="place camera on the left and trajectory on the right")
-    parser.add_argument("--codec", default="mp4v", help="OpenCV fourcc codec, e.g. mp4v or avc1")
+    parser.add_argument("--codec", default="h264", help="output codec: h264 for browser MP4, or an OpenCV fourcc such as mp4v")
     return parser.parse_args()
 
 
@@ -262,6 +263,43 @@ def open_writer(output_path: Path, codec: str, fps: float, size: tuple[int, int]
     return writer
 
 
+def wants_h264(codec: str) -> bool:
+    return codec.lower() in {"h264", "avc1", "libx264"}
+
+
+def transcode_to_h264(input_path: Path, output_path: Path, fps: float) -> None:
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(input_path),
+        "-an",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "23",
+        "-pix_fmt",
+        "yuv420p",
+        "-r",
+        f"{fps:.8g}",
+        "-movflags",
+        "+faststart",
+        str(output_path),
+    ]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except FileNotFoundError as exc:
+        raise RuntimeError("ffmpeg is required to write browser-compatible H.264 previews") from exc
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        raise RuntimeError(f"ffmpeg H.264 transcode failed: {detail}") from exc
+
+
 def render_video(
     dataset: LeRobotV21Dataset,
     args: argparse.Namespace,
@@ -280,6 +318,10 @@ def render_video(
     indices = output_indices(len(left), stride, args.max_frames)
     output_path = Path(args.output).expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    h264_output = wants_h264(str(args.codec))
+    write_path = output_path.with_name(f"{output_path.stem}.tmp_mpeg4{output_path.suffix}") if h264_output else output_path
+    if write_path.exists():
+        write_path.unlink()
 
     width = max(640, int(args.width))
     height = max(360, int(args.height))
@@ -301,7 +343,7 @@ def render_video(
     decoder = iter_video_rgb(video_path)
     decoded_index = 0
     last_camera_frame: np.ndarray | None = None
-    writer = open_writer(output_path, args.codec, fps, (width, height))
+    writer = open_writer(write_path, "mp4v" if h264_output else args.codec, fps, (width, height))
 
     try:
         for out_idx, source_idx in enumerate(indices):
@@ -336,6 +378,12 @@ def render_video(
                     )
     finally:
         writer.release()
+
+    if h264_output:
+        if progress is not None:
+            progress({"status": "running", "message": "encoding browser-compatible MP4", "progress": 0.97})
+        transcode_to_h264(write_path, output_path, fps)
+        write_path.unlink(missing_ok=True)
 
     return output_path
 

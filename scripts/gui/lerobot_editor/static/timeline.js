@@ -137,6 +137,20 @@ export function createTimelineController(ctx) {
     }
   }
 
+  function renderGripperTransitionMarkers(start, end) {
+    for (const transition of state.episode?.gripper?.transitions || []) {
+      const transitionStart = Math.max(Number(transition.start_frame) || 0, start);
+      const transitionEnd = Math.min((Number(transition.end_frame) || transitionStart) + 1, end);
+      if (transitionStart >= transitionEnd) continue;
+      const node = document.createElement("div");
+      node.className = `gripper-transition-marker ${transition.direction === "closing" ? "closing" : "opening"}`;
+      node.style.left = `${boundaryToX(transitionStart)}px`;
+      node.style.width = `${Math.max(3, boundaryToX(transitionEnd) - boundaryToX(transitionStart))}px`;
+      node.title = `${transition.name} ${transition.direction} ${transition.start_frame}-${transition.end_frame}`;
+      els.timeline.appendChild(node);
+    }
+  }
+
   function renderTimeline() {
     if (!state.episode) return;
     updateTimelineContentSize();
@@ -148,6 +162,7 @@ export function createTimelineController(ctx) {
     renderThumbnails(start, end);
     renderDeletedOverlays(segments, start, end);
     renderCutBoundaries(start, end);
+    renderGripperTransitionMarkers(start, end);
 
     for (let tick = Math.ceil(start / step) * step; tick < end; tick += step) {
       const node = document.createElement("div");

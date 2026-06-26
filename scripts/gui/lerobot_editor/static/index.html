@@ -37,9 +37,11 @@
       <div id="panelSources" class="panel-sources">
         <section id="viewportPanelSource" class="viewer-panel">
           <div class="inspector dataset-summary">
-            <div class="metric dataset-metric">
-              <span>Dataset</span>
-              <strong id="datasetName">-</strong>
+            <div class="metric dataset-metric annotation-summary-card">
+              <span>Completed Stats</span>
+              <strong id="annotationSummaryMain">-</strong>
+              <div id="annotationScoreStats" class="summary-chips"></div>
+              <div id="annotationLabelStats" class="summary-chips"></div>
             </div>
             <div class="metric">
               <span>Episode</span>
@@ -167,12 +169,15 @@
         </section>
 
         <section id="trajectoryPanelSource" class="trajectory-panel">
-          <div class="panel-title">Trajectory Preview</div>
+          <div class="trajectory-toolbar">
+            <div class="panel-title">Trajectory Preview</div>
+            <button id="generateTrajectory" class="primary" type="button" disabled>Generate</button>
+          </div>
           <video id="trajectoryVideo" controls muted playsinline></video>
           <div class="trajectory-progress" aria-label="Trajectory render progress">
             <div id="trajectoryProgressBar"></div>
           </div>
-          <div id="trajectoryStatus" class="trajectory-status">Mark an episode complete to generate a preview</div>
+          <div id="trajectoryStatus" class="trajectory-status">Click Generate to render a preview</div>
         </section>
 
         <section id="terminalPanelSource" class="terminal-panel">

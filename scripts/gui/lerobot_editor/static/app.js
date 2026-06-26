@@ -63,6 +63,7 @@ function bindEvents() {
   els.redoEdit.addEventListener("click", () => ctx.edits.redo().catch((err) => ctx.setStatus(err.message)));
   els.markComplete.addEventListener("click", () => ctx.progress.toggleCurrentComplete().catch((err) => ctx.setStatus(err.message)));
   els.saveProgress.addEventListener("click", () => ctx.progress.saveProgress().catch((err) => ctx.setStatus(err.message)));
+  els.generateTrajectory.addEventListener("click", () => ctx.progress.generateTrajectoryPreview().catch((err) => ctx.setStatus(err.message)));
   els.ratingButtons.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-rating]");
     if (!button) return;

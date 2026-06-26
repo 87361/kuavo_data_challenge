@@ -331,6 +331,40 @@ button:disabled {
   line-height: 1.25;
 }
 
+.annotation-summary-card {
+  align-content: start;
+  gap: 6px;
+}
+
+.summary-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+  max-height: 48px;
+  overflow: auto;
+}
+
+.summary-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-height: 20px;
+  padding: 2px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 5px;
+  color: #dbe7ef;
+  background: #151a1f;
+  font-size: 11px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.summary-chip.empty {
+  color: var(--muted);
+  border-style: dashed;
+}
+
 .metric {
   display: grid;
   gap: 5px;
@@ -553,6 +587,23 @@ button:disabled {
   background: var(--panel);
 }
 
+.trajectory-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.trajectory-toolbar .panel-title {
+  min-width: 0;
+}
+
+.trajectory-toolbar button {
+  flex: 0 0 auto;
+  height: 30px;
+}
+
 .trajectory-panel video {
   width: 100%;
   min-height: 160px;
@@ -762,6 +813,26 @@ button:disabled {
   background: rgba(255, 255, 255, 0.52);
   pointer-events: none;
   z-index: 3;
+}
+
+.gripper-transition-marker {
+  position: absolute;
+  top: 0;
+  bottom: 34px;
+  min-width: 3px;
+  border-left: 2px solid rgba(255, 255, 255, 0.22);
+  pointer-events: none;
+  z-index: 3;
+}
+
+.gripper-transition-marker.closing {
+  background: rgba(239, 107, 115, 0.28);
+  border-left-color: rgba(239, 107, 115, 0.88);
+}
+
+.gripper-transition-marker.opening {
+  background: rgba(104, 211, 145, 0.24);
+  border-left-color: rgba(104, 211, 145, 0.86);
 }
 
 .segment {
