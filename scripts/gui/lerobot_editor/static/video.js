@@ -258,19 +258,28 @@ export function createVideoController(ctx) {
     state.playbackRaf = requestAnimationFrame(updatePlaybackFromVideo);
   }
 
+  function hasHiddenDeletedFrames() {
+    return !state.showDeletedSegments && Boolean(state.episode?.deleted_segments?.length);
+  }
+
   function startFrameFallbackPlayback() {
     const intervalMs = 1000 / (ctx.frames.fps() * Math.max(0.1, Number(state.playbackRate) || 1));
     state.timer = setInterval(() => {
       if (!state.episode) return;
-      if (state.currentFrame >= state.episode.length - 1) {
+      const nextFrame = ctx.frames.nextVisibleFrame(state.currentFrame, 1);
+      if (nextFrame <= state.currentFrame || state.currentFrame >= state.episode.length - 1) {
         stopPlayback();
         return;
       }
-      ctx.frames.setCurrentFrame(state.currentFrame + 1, { seek: false });
+      ctx.frames.setCurrentFrame(nextFrame, { seek: true, forceSeek: hasHiddenDeletedFrames() });
     }, intervalMs);
   }
 
   async function startNativePlayback() {
+    if (hasHiddenDeletedFrames()) {
+      startFrameFallbackPlayback();
+      return;
+    }
     syncVideosToFrame(state.currentFrame, true);
     const videos = playableVideoElements();
     if (!videos.length) {

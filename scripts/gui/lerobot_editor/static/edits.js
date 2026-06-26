@@ -44,6 +44,9 @@ export function createEditController(ctx) {
     state.episode.cuts = payload.cuts;
     state.episode.deleted_segments = payload.deleted_segments;
     state.episode.segments = payload.segments;
+    if (!state.showDeletedSegments) {
+      state.currentFrame = ctx.frames.nearestVisibleFrame(state.currentFrame);
+    }
     state.selectedSegment = ctx.metrics.currentSegment()?.index ?? null;
     ctx.renderAll();
     ctx.progress.noteEdits(payload.all_edits);

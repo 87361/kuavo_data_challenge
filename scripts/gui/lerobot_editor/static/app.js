@@ -59,6 +59,10 @@ function bindEvents() {
   els.playbackRate.addEventListener("change", () => ctx.video.setPlaybackRate(Number(els.playbackRate.value) || 1));
   els.cutFrame.addEventListener("click", () => ctx.edits.cutAtFrame().catch((err) => ctx.setStatus(err.message)));
   els.deleteSegment.addEventListener("click", () => ctx.edits.toggleDeleteSegment().catch((err) => ctx.setStatus(err.message)));
+  els.showDeletedSegments.addEventListener("change", () => {
+    state.showDeletedSegments = Boolean(els.showDeletedSegments.checked);
+    ctx.episodes.openDataset({ keepEpisode: true }).catch((err) => ctx.setStatus(err.message));
+  });
   els.undoEdit.addEventListener("click", () => ctx.edits.undo().catch((err) => ctx.setStatus(err.message)));
   els.redoEdit.addEventListener("click", () => ctx.edits.redo().catch((err) => ctx.setStatus(err.message)));
   els.markComplete.addEventListener("click", () => ctx.progress.toggleCurrentComplete().catch((err) => ctx.setStatus(err.message)));

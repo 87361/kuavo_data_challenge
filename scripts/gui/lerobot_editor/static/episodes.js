@@ -40,12 +40,22 @@ export function createEpisodeController(ctx) {
     els.episodeIndicator.textContent = total ? `Episode ${state.episodeIndex + 1} / ${total}${complete}` : "Episode - / -";
   }
 
-  async function openDataset() {
+  async function openDataset(options = {}) {
     const path = els.datasetSelect.value;
     if (!path) return;
+    const targetEpisode = options.keepEpisode ? state.episodeIndex : 0;
     ctx.video.stopPlayback();
     setStatus("Loading dataset");
-    state.dataset = await api("/api/open", { method: "POST", body: JSON.stringify({ path }) });
+    state.showDeletedSegments = Boolean(els.showDeletedSegments?.checked);
+    state.dataset = await api("/api/open", {
+      method: "POST",
+      body: JSON.stringify({
+        path,
+        show_deleted_segments: state.showDeletedSegments,
+      }),
+    });
+    state.showDeletedSegments = Boolean(state.dataset.show_deleted_segments);
+    if (els.showDeletedSegments) els.showDeletedSegments.checked = state.showDeletedSegments;
     state.progress = state.dataset.progress || null;
     state.history = [];
     state.future = [];
@@ -54,7 +64,7 @@ export function createEpisodeController(ctx) {
       els.urdfPath.value = storedString(STORAGE.urdfPath, "") || state.dataset.urdf_path || "";
     }
     ctx.progress.applyProgress(state.progress);
-    await loadEpisode(0);
+    await loadEpisode(targetEpisode);
     setStatus("Ready");
   }
 

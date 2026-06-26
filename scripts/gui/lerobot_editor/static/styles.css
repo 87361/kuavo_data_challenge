@@ -684,13 +684,35 @@ button:disabled {
 
 .transport {
   display: grid;
-  grid-template-columns: 48px 72px 76px 48px 68px 82px 70px 70px minmax(160px, 0.8fr) minmax(220px, 1fr) 78px;
+  grid-template-columns: 48px 72px 76px 48px 68px 82px 118px 70px 70px minmax(160px, 0.8fr) minmax(220px, 1fr) 78px;
   gap: 8px;
   align-items: center;
   min-width: 0;
   padding: 0;
   border: 0;
   background: transparent;
+}
+
+.inline-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 34px;
+  min-width: 0;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--panel-2);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.inline-toggle input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
 }
 
 .export-field {

@@ -526,9 +526,19 @@ def test_open_source_dataset_adopts_latest_legacy_workspace(tmp_path: Path) -> N
 
     opened = client.post("/api/open", json={"path": str(source)}).json()
     assert opened["path"] == str(source.resolve())
-    assert opened["active_dataset"] == str(first.resolve())
+    assert opened["active_dataset"] == str(second.resolve())
     assert opened["active_workspace_path"] == str(second.resolve())
+    assert opened["show_deleted_segments"] is False
+    assert opened["progress"]["edits"] == {}
     assert opened["progress"]["last_export_path"] == str(second.resolve())
+
+    show_deleted = client.post(
+        "/api/open",
+        json={"path": str(source), "show_deleted_segments": True},
+    ).json()
+    assert show_deleted["active_dataset"] == str(first.resolve())
+    assert show_deleted["show_deleted_segments"] is True
+    assert show_deleted["progress"]["edits"]["1"] == {"cuts": [2, 4], "deleted_segments": [1]}
 
 
 def test_annotation_only_export_does_not_rewrite_video(tmp_path: Path) -> None:

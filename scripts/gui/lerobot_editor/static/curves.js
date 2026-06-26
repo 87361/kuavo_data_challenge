@@ -226,6 +226,10 @@ export function createCurveController(ctx) {
 
       let first = true;
       for (let frame = start; frame < end; frame += step) {
+        if (!state.showDeletedSegments && !ctx.frames.isVisibleFrame(frame)) {
+          first = true;
+          continue;
+        }
         const value = values[frame] ?? 0;
         const normalized = ((value - mid) / range) * 2;
         const x = xForFrame(frame);
@@ -239,6 +243,10 @@ export function createCurveController(ctx) {
       }
 
       if (end - 1 > start) {
+        if (!state.showDeletedSegments && !ctx.frames.isVisibleFrame(end - 1)) {
+          ctx2d.stroke();
+          continue;
+        }
         const value = values[end - 1] ?? 0;
         const normalized = ((value - mid) / range) * 2;
         ctx2d.lineTo(xForFrame(end - 1), clamp(center - normalized * amp, top, bottom));

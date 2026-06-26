@@ -54,6 +54,7 @@ DEFAULT_KUAVO_URDF_CANDIDATES = [
 
 class OpenRequest(BaseModel):
     path: str
+    show_deleted_segments: bool = False
 
 
 class CutsRequest(BaseModel):
@@ -192,6 +193,7 @@ class AppState:
         self.max_transition_frames = 60
         self.canonical_source_path: Path | None = None
         self.active_workspace_path: Path | None = None
+        self.show_deleted_segments = False
         self.dataset: LeRobotV21Dataset | None = None
         self.edits: dict[str, Any] = {}
         self.episode_annotations: dict[str, dict[str, Any]] = {}
@@ -530,10 +532,11 @@ def _merge_note_labels(*groups: Any) -> list[str]:
     return labels
 
 
-def _apply_progress_payload(dataset: LeRobotV21Dataset, payload: dict[str, Any]) -> None:
+def _apply_progress_payload(dataset: LeRobotV21Dataset, payload: dict[str, Any], include_edits: bool = True) -> None:
     saved_at = payload.get("saved_at")
-    edits = _normalize_progress_edits(dataset, payload.get("edits"))
-    state.edits.update(edits)
+    if include_edits:
+        edits = _normalize_progress_edits(dataset, payload.get("edits"))
+        state.edits.update(edits)
     annotations = _normalize_episode_annotations(
         dataset,
         payload.get("episode_annotations"),
@@ -549,14 +552,15 @@ def _apply_progress_payload(dataset: LeRobotV21Dataset, payload: dict[str, Any])
         state.last_export_path = str(last_export)
 
 
-def _apply_manifest_progress(dataset: LeRobotV21Dataset, manifest: dict[str, Any]) -> None:
+def _apply_manifest_progress(dataset: LeRobotV21Dataset, manifest: dict[str, Any], include_edits: bool = True) -> None:
     manifest_edits: dict[str, Any] = {}
     for key, entry in (manifest.get("episodes") or {}).items():
         manifest_edits[key] = {
             "cuts": entry.get("cuts", []),
             "deleted_segments": entry.get("deleted_segments", []),
         }
-    state.edits.update(_normalize_progress_edits(dataset, manifest_edits))
+    if include_edits:
+        state.edits.update(_normalize_progress_edits(dataset, manifest_edits))
     state.episode_annotations = _merge_episode_annotations(
         state.episode_annotations,
         _normalize_episode_annotations(
@@ -648,6 +652,7 @@ def _progress_payload(dataset: LeRobotV21Dataset) -> dict[str, Any]:
         "total_episodes": len(dataset.episodes),
         "annotation_stats": _annotation_stats(dataset),
         "active_workspace_path": str(active_workspace) if active_workspace else None,
+        "show_deleted_segments": state.show_deleted_segments,
         "default_export_path": str(_default_workspace_path(canonical)),
         "last_export_path": str(active_workspace) if active_workspace else state.last_export_path,
     }
@@ -694,7 +699,11 @@ def _load_progress(dataset: LeRobotV21Dataset) -> None:
         manifest_path = _manifest_path(state.active_workspace_path)
         if manifest_path.exists():
             try:
-                _apply_manifest_progress(dataset, _read_json_file(manifest_path))
+                _apply_manifest_progress(
+                    dataset,
+                    _read_json_file(manifest_path),
+                    include_edits=state.show_deleted_segments,
+                )
             except Exception:
                 pass
         state.last_export_path = str(state.active_workspace_path)
@@ -703,12 +712,25 @@ def _load_progress(dataset: LeRobotV21Dataset) -> None:
 
     source_payload = _read_progress_payload(_progress_path_for_root(canonical))
     if source_payload and _progress_matches_dataset(source_payload, canonical, active_dataset):
-        _apply_progress_payload(dataset, source_payload)
+        _apply_progress_payload(
+            dataset,
+            source_payload,
+            include_edits=state.show_deleted_segments or state.active_workspace_path is None,
+        )
 
     if state.active_workspace_path is not None:
         workspace_payload = _read_progress_payload(_progress_path_for_root(state.active_workspace_path))
         if workspace_payload and _progress_matches_dataset(workspace_payload, canonical, active_dataset):
-            _apply_progress_payload(dataset, workspace_payload)
+            workspace_active = workspace_payload.get("active_dataset")
+            try:
+                workspace_active_path = Path(workspace_active).expanduser().resolve() if workspace_active else None
+            except Exception:
+                workspace_active_path = None
+            _apply_progress_payload(
+                dataset,
+                workspace_payload,
+                include_edits=state.show_deleted_segments or workspace_active_path == active_dataset,
+            )
 
     _sync_completed_from_annotations()
 
@@ -891,12 +913,19 @@ def api_open(req: OpenRequest) -> dict[str, Any]:
     try:
         canonical = _resolve_canonical_source(req.path)
         active_workspace = _find_active_workspace(canonical)
-        active_dataset_path = _workspace_source_path(active_workspace, canonical) if active_workspace else canonical
+        show_deleted = bool(req.show_deleted_segments)
+        if active_workspace is not None and not show_deleted:
+            active_dataset_path = active_workspace
+        elif active_workspace is not None:
+            active_dataset_path = _workspace_source_path(active_workspace, canonical)
+        else:
+            active_dataset_path = canonical
         dataset = load_v21_dataset(active_dataset_path)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     state.canonical_source_path = canonical
     state.active_workspace_path = active_workspace
+    state.show_deleted_segments = show_deleted
     state.dataset = dataset
     _load_progress(dataset)
     state.analysis_job.reset()
@@ -908,6 +937,7 @@ def api_open(req: OpenRequest) -> dict[str, Any]:
         "path": str(canonical),
         "active_dataset": str(dataset.root),
         "active_workspace_path": str(active_workspace) if active_workspace else None,
+        "show_deleted_segments": state.show_deleted_segments,
         "default_export_path": str(_default_workspace_path(canonical)),
         "fps": dataset.fps,
         "total_episodes": len(dataset.episodes),

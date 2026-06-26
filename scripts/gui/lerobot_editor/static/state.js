@@ -7,6 +7,7 @@ export const state = {
   episodeIndex: 0,
   currentFrame: 0,
   selectedSegment: null,
+  showDeletedSegments: false,
   playing: false,
   timer: null,
   playbackRaf: null,

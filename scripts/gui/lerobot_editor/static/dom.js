@@ -26,6 +26,7 @@ export function collectElements() {
     nextFrame: document.getElementById("nextFrame"),
     cutFrame: document.getElementById("cutFrame"),
     deleteSegment: document.getElementById("deleteSegment"),
+    showDeletedSegments: document.getElementById("showDeletedSegments"),
     undoEdit: document.getElementById("undoEdit"),
     redoEdit: document.getElementById("redoEdit"),
     urdfPath: document.getElementById("urdfPath"),

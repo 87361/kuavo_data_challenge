@@ -102,6 +102,7 @@ export function createTimelineController(ctx) {
     const stepFrames = Math.max(1, Math.round(fps * state.thumbnailIntervalSeconds));
     const first = Math.max(0, Math.floor(start / stepFrames) * stepFrames);
     for (let frame = first; frame < end; frame += stepFrames) {
+      if (!state.showDeletedSegments && !ctx.frames.isVisibleFrame(frame)) continue;
       const nextFrame = Math.min(state.episode.length, frame + stepFrames);
       const node = document.createElement("div");
       node.className = "timeline-thumb";
