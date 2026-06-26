@@ -1,0 +1,30 @@
+FROM ros:noetic-ros-core-focal
+
+WORKDIR /root/kuavo_data_challenge
+
+RUN printf 'Acquire::Retries "5";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' \
+    > /etc/apt/apt.conf.d/80-retries && \
+    apt-get update && apt-get install -y \
+    ros-noetic-cv-bridge \
+    ros-noetic-apriltag-ros \
+    libgl1 \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=kdc_task1_pi05_lora_builder:cache /opt/conda /opt/conda
+COPY --from=kdc_task1_pi05_lora_builder:cache /root/kuavo_data_challenge /root/kuavo_data_challenge
+COPY --from=kdc_task1_pi05_lora_builder:cache /root/.cache/torch/hub/checkpoints /root/.cache/torch/hub/checkpoints
+
+ENV PATH="/opt/conda/bin:${PATH}"
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+ENV OPENPI_PYTHON=/opt/conda/envs/openpi/bin/python
+
+ENV ROS_MASTER_URI=http://kuavo_master:11311
+ENV ROS_IP=192.168.26.10
+
+RUN echo "source /opt/ros/noetic/setup.bash" >> /root/.bashrc && \
+    echo "source /root/kuavo_data_challenge/myenv/bin/activate" >> /root/.bashrc && \
+    chmod 777 -R /root/kuavo_data_challenge/kuavo_deploy
+
+CMD ["bash"]

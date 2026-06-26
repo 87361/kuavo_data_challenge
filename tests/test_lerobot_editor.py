@@ -9,6 +9,7 @@ import av
 import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
+import pytest
 from fastapi.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -86,13 +87,13 @@ def write_video(path: Path, frames: int = 5, size: tuple[int, int] = (64, 48)) -
             output.mux(packet)
 
 
-def make_v21_dataset(root: Path) -> Path:
+def make_v21_dataset(root: Path, episode_count: int = 1, frames_per_episode: int = 5) -> Path:
     info = {
         "codebase_version": "v2.1",
         "fps": 10,
-        "total_episodes": 1,
-        "total_frames": 5,
-        "total_videos": 1,
+        "total_episodes": episode_count,
+        "total_frames": episode_count * frames_per_episode,
+        "total_videos": episode_count,
         "chunks_size": 1000,
         "total_chunks": 1,
         "total_tasks": 1,
@@ -125,42 +126,49 @@ def make_v21_dataset(root: Path) -> Path:
     }
     write_json(root / "meta" / "info.json", info)
     write_jsonl(root / "meta" / "tasks.jsonl", [{"task_index": 0, "task": "test"}])
-    write_jsonl(root / "meta" / "episodes.jsonl", [{"episode_index": 0, "tasks": ["test"], "length": 5}])
-    write_jsonl(root / "meta" / "episodes_stats.jsonl", [{"episode_index": 0, "stats": {}}])
+    write_jsonl(
+        root / "meta" / "episodes.jsonl",
+        [{"episode_index": idx, "tasks": ["test"], "length": frames_per_episode} for idx in range(episode_count)],
+    )
+    write_jsonl(root / "meta" / "episodes_stats.jsonl", [{"episode_index": idx, "stats": {}} for idx in range(episode_count)])
 
-    rows = []
-    for idx in range(5):
-        vec = np.zeros(16, dtype=np.float32)
-        vec[0] = idx * 0.1
-        vec[8] = idx * 0.1
-        rows.append(
-            {
-                "observation.state": vec,
-                "action": vec.copy(),
-                "timestamp": idx / 10,
-                "frame_index": idx,
-                "episode_index": 0,
-                "index": idx,
-                "task_index": 0,
-            }
-        )
-    parquet_path = root / "data" / "chunk-000" / "episode_000000.parquet"
-    parquet_path.parent.mkdir(parents=True, exist_ok=True)
     import pyarrow as pa
 
-    table = pa.Table.from_pydict(
-        {
-            "observation.state": [row["observation.state"].tolist() for row in rows],
-            "action": [row["action"].tolist() for row in rows],
-            "timestamp": [row["timestamp"] for row in rows],
-            "frame_index": [row["frame_index"] for row in rows],
-            "episode_index": [row["episode_index"] for row in rows],
-            "index": [row["index"] for row in rows],
-            "task_index": [row["task_index"] for row in rows],
-        }
-    )
-    pq.write_table(table, parquet_path, compression="snappy")
-    write_video(root / "videos" / "chunk-000" / "observation.images.head_cam_h" / "episode_000000.mp4")
+    for episode_index in range(episode_count):
+        rows = []
+        for idx in range(frames_per_episode):
+            vec = np.zeros(16, dtype=np.float32)
+            vec[0] = (episode_index * 10 + idx) * 0.1
+            vec[8] = (episode_index * 10 + idx) * 0.1
+            rows.append(
+                {
+                    "observation.state": vec,
+                    "action": vec.copy(),
+                    "timestamp": idx / 10,
+                    "frame_index": idx,
+                    "episode_index": episode_index,
+                    "index": episode_index * frames_per_episode + idx,
+                    "task_index": 0,
+                }
+            )
+        parquet_path = root / "data" / "chunk-000" / f"episode_{episode_index:06d}.parquet"
+        parquet_path.parent.mkdir(parents=True, exist_ok=True)
+        table = pa.Table.from_pydict(
+            {
+                "observation.state": [row["observation.state"].tolist() for row in rows],
+                "action": [row["action"].tolist() for row in rows],
+                "timestamp": [row["timestamp"] for row in rows],
+                "frame_index": [row["frame_index"] for row in rows],
+                "episode_index": [row["episode_index"] for row in rows],
+                "index": [row["index"] for row in rows],
+                "task_index": [row["task_index"] for row in rows],
+            }
+        )
+        pq.write_table(table, parquet_path, compression="snappy")
+        write_video(
+            root / "videos" / "chunk-000" / "observation.images.head_cam_h" / f"episode_{episode_index:06d}.mp4",
+            frames=frames_per_episode,
+        )
     return root
 
 
@@ -240,6 +248,85 @@ def test_export_without_urdf_uses_fixed_transition_frames(tmp_path: Path) -> Non
     assert (output / "meta" / "info.json").exists()
 
 
+def test_incremental_export_updates_only_later_dirty_episode(tmp_path: Path) -> None:
+    source = make_v21_dataset(tmp_path / "dataset" / "task" / "lerobot", episode_count=2)
+    output = tmp_path / "out" / "task" / "lerobot"
+
+    first = export_v21_dataset(source, output, edits={}, urdf_path=None, video_codec="mpeg4")
+    assert first["regenerated_episodes"] == [0, 1]
+
+    video0 = output / "videos" / "chunk-000" / "observation.images.head_cam_h" / "episode_000000.mp4"
+    video1 = output / "videos" / "chunk-000" / "observation.images.head_cam_h" / "episode_000001.mp4"
+    parquet0 = output / "data" / "chunk-000" / "episode_000000.parquet"
+    before = {
+        "video0": video0.stat().st_mtime_ns,
+        "video1": video1.stat().st_mtime_ns,
+        "parquet0": parquet0.stat().st_mtime_ns,
+    }
+    time.sleep(0.02)
+
+    second = export_v21_dataset(
+        source,
+        output,
+        edits={"1": {"cuts": [2, 4], "deleted_segments": [1]}},
+        urdf_path=None,
+        video_codec="mpeg4",
+    )
+
+    assert second["regenerated_episodes"] == [1]
+    assert second["reindexed_episodes"] == []
+    assert video0.stat().st_mtime_ns == before["video0"]
+    assert parquet0.stat().st_mtime_ns == before["parquet0"]
+    assert video1.stat().st_mtime_ns > before["video1"]
+
+
+def test_incremental_export_reindexes_downstream_without_reencoding_video(tmp_path: Path) -> None:
+    source = make_v21_dataset(tmp_path / "dataset" / "task" / "lerobot", episode_count=2)
+    output = tmp_path / "out" / "task" / "lerobot"
+
+    export_v21_dataset(
+        source,
+        output,
+        edits={},
+        urdf_path=None,
+        min_transition_frames=1,
+        video_codec="mpeg4",
+    )
+    video1 = output / "videos" / "chunk-000" / "observation.images.head_cam_h" / "episode_000001.mp4"
+    parquet1 = output / "data" / "chunk-000" / "episode_000001.parquet"
+    video1_mtime = video1.stat().st_mtime_ns
+    parquet1_mtime = parquet1.stat().st_mtime_ns
+    time.sleep(0.02)
+
+    manifest = export_v21_dataset(
+        source,
+        output,
+        edits={"0": {"cuts": [2, 4], "deleted_segments": [1]}},
+        urdf_path=None,
+        min_transition_frames=1,
+        video_codec="mpeg4",
+    )
+
+    assert manifest["regenerated_episodes"] == [0]
+    assert manifest["reindexed_episodes"] == [1]
+    assert video1.stat().st_mtime_ns == video1_mtime
+    assert parquet1.stat().st_mtime_ns > parquet1_mtime
+    table = pq.read_table(parquet1).to_pandas()
+    assert table["index"].tolist() == [4, 5, 6, 7, 8]
+    info = json.loads((output / "meta" / "info.json").read_text())
+    assert info["total_frames"] == 9
+
+
+def test_incremental_export_rejects_non_editor_output_directory(tmp_path: Path) -> None:
+    source = make_v21_dataset(tmp_path / "dataset" / "task" / "lerobot")
+    output = tmp_path / "not_an_export" / "lerobot"
+    output.mkdir(parents=True)
+    (output / "notes.txt").write_text("occupied\n", encoding="utf-8")
+
+    with pytest.raises(FileExistsError, match="not an editor export workspace"):
+        export_v21_dataset(source, output, edits={}, urdf_path=None, video_codec="mpeg4")
+
+
 def test_export_endpoint_accepts_urdf_path_from_request(tmp_path: Path) -> None:
     source = make_v21_dataset(tmp_path / "dataset" / "task" / "lerobot")
     urdf = make_test_urdf(tmp_path / "test.urdf")
@@ -264,6 +351,41 @@ def test_export_endpoint_accepts_urdf_path_from_request(tmp_path: Path) -> None:
     assert status["status"] == "complete"
     assert status["manifest"]["urdf_path"] == str(urdf.resolve())
     assert status["manifest"]["transition"]["mode"] == "adaptive_eef_distance"
+
+
+def test_progress_save_load_and_restore_edits(tmp_path: Path) -> None:
+    source = make_v21_dataset(tmp_path / "dataset" / "task" / "lerobot", episode_count=2)
+    state.dataset = None
+    state.edits = {}
+    state.completed_episodes = set()
+    state.progress_saved_at = None
+    state.last_export_path = None
+    client = TestClient(app)
+
+    response = client.post("/api/open", json={"path": str(source)})
+    assert response.status_code == 200
+    assert response.json()["progress"]["completed_count"] == 0
+
+    cut_response = client.post(
+        "/api/cuts",
+        json={"episode_index": 1, "cuts": [2, 4], "deleted_segments": [1]},
+    )
+    assert cut_response.status_code == 200
+    complete_response = client.post("/api/progress/episode/1", json={"completed": True})
+    assert complete_response.status_code == 200
+    save_response = client.post("/api/progress/save", json={})
+    assert save_response.status_code == 200
+    saved = save_response.json()
+    assert saved["completed_episodes"] == [1]
+    assert saved["edited_count"] == 1
+    assert (source / ".lerobot_editor" / "progress.json").exists()
+
+    reopen = client.post("/api/open", json={"path": str(source)}).json()
+    assert reopen["progress"]["completed_episodes"] == [1]
+    assert reopen["progress"]["edits"]["1"]["cuts"] == [2, 4]
+    episode = client.get("/api/episode/1").json()
+    assert episode["cuts"] == [2, 4]
+    assert episode["deleted_segments"] == [1]
 
 
 def test_video_endpoint_serves_episode_video(tmp_path: Path) -> None:

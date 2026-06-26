@@ -36,12 +36,41 @@ ssh pi1022 'cd /data/vepfs/users/intern/lingyue.yang/kuavo_data_challenge && git
 ### 2. 数据路径
 
 ```bash
-RAW=/home/yly/data/kuavo_tianchi/raw/real_suzhou_3.0/task1_zhuomian
+DATA_ROOT=/home/yly/data/kuavo_tianchi
+RAW_ROOT=$DATA_ROOT/raw
+RAW=$RAW_ROOT/real_suzhou_3.0/task1_zhuomian
 V21=/home/yly/data/kuavo_tianchi/lerobot_v21_task1_50/task1_zhuomian
 V30=/home/yly/data/kuavo_tianchi/lerobot_v30_task1_50/task1_zhuomian
+REMOTE_DATA=/data/vepfs/users/intern/lingyue.yang/datasets/kuavo_tianchi
 ```
 
-本次已下载 50 条 task1 rosbag：
+ModelScope 下载：
+
+```bash
+python -m pip install -U modelscope pandas pyarrow
+mkdir -p "$RAW_ROOT"
+modelscope download --dataset lejurobot/LET-Tianchi-Dataset \
+  --include 'real_suzhou_3.0/task1_zhuomian/*.bag' \
+  --local_dir "$RAW_ROOT" \
+  --max-workers 8
+```
+
+只拉前 50 条：
+
+```bash
+mkdir -p "$RAW_ROOT"
+python - <<'PY' > /tmp/kdc_task1_50_files.txt
+from modelscope.hub.api import HubApi
+fs=HubApi().get_dataset_files('lejurobot/LET-Tianchi-Dataset', root_path='real_suzhou_3.0/task1_zhuomian', recursive=True, page_size=1000)
+print('\n'.join(sorted(f['Path'] for f in fs if f.get('Path','').endswith('.bag'))[:50]))
+PY
+xargs -a /tmp/kdc_task1_50_files.txt modelscope download \
+  --dataset lejurobot/LET-Tianchi-Dataset \
+  --local_dir "$RAW_ROOT" \
+  --max-workers 8
+```
+
+校验：
 
 ```bash
 find "$RAW" -maxdepth 1 -name '*.bag' | wc -l
@@ -93,11 +122,95 @@ for p in [
     print(info['codebase_version'], info['total_episodes'], info['total_frames'], info['fps'])
 PY
 
-rsync -avh --info=progress2 /home/yly/data/kuavo_tianchi/lerobot_v21_task1_50/ pi1022:/data/vepfs/users/intern/lingyue.yang/datasets/kuavo_tianchi/lerobot_v21_task1_50/
-rsync -avh --info=progress2 /home/yly/data/kuavo_tianchi/lerobot_v30_task1_50/ pi1022:/data/vepfs/users/intern/lingyue.yang/datasets/kuavo_tianchi/lerobot_v30_task1_50/
+ssh pi1022 "mkdir -p $REMOTE_DATA"
+
+rsync -avh --info=progress2 \
+  /home/yly/data/kuavo_tianchi/lerobot_v21_task1_50/ \
+  pi1022:$REMOTE_DATA/lerobot_v21_task1_50/
+
+rsync -avh --info=progress2 \
+  /home/yly/data/kuavo_tianchi/lerobot_v30_task1_50/ \
+  pi1022:$REMOTE_DATA/lerobot_v30_task1_50/
+```
+
+上传 raw 到开发机：
+
+```bash
+ssh pi1022 "mkdir -p $REMOTE_DATA/raw/real_suzhou_3.0/task1_zhuomian"
+rsync -avh --info=progress2 \
+  /home/yly/data/kuavo_tianchi/raw/real_suzhou_3.0/task1_zhuomian/ \
+  pi1022:$REMOTE_DATA/raw/real_suzhou_3.0/task1_zhuomian/
+```
+
+拉回转换数据：
+
+```bash
+mkdir -p /home/yly/data/kuavo_tianchi
+rsync -avh --info=progress2 \
+  pi1022:$REMOTE_DATA/lerobot_v21_task1_50/ \
+  /home/yly/data/kuavo_tianchi/lerobot_v21_task1_50/
+rsync -avh --info=progress2 \
+  pi1022:$REMOTE_DATA/lerobot_v30_task1_50/ \
+  /home/yly/data/kuavo_tianchi/lerobot_v30_task1_50/
 ```
 
 本次结果：`v2.1 50 6376 10`，`v3.0 50 6376 10`。
+
+## 真机赛 Task1 全量数据准备（1000 条 real_suzhou_3.0，LeRobot v2.1/v3.0）
+
+`/home` 当前空间不够，全量数据放 `/mnt/data`。2026-06-23 元数据检查：`real_suzhou_3.0/task1_zhuomian` 共 `1000` 个 `.bag`，raw 约 `486.29 GiB`。
+
+默认流程：源 rosbag 先下载到本机 `$DATA_ROOT/raw`，每批转换成 v2.1 后删除该批 raw 以节省空间；最后合并完整 v2.1，再从 v2.1 转出完整 v3.0，并上传开发机。中断后重跑同一条 `run` 命令即可从状态目录继续。
+
+```bash
+DATA_ROOT=/mnt/data/kuavo_tianchi
+REMOTE_DATA=/data/vepfs/users/intern/lingyue.yang/datasets/kuavo_tianchi
+
+python -m pip install -U modelscope pandas pyarrow
+
+python scripts/data/prepare_task1_full_dataset.py plan \
+  --data-root "$DATA_ROOT" \
+  --batch-max-gib 80
+
+python scripts/data/prepare_task1_full_dataset.py run \
+  --data-root "$DATA_ROOT" \
+  --batch-max-gib 80 \
+  --max-workers 8 \
+  --v21-env kdc \
+  --v30-env kdc_icra \
+  --upload \
+  --remote pi1022:$REMOTE_DATA
+```
+
+如果要长期保留完整 raw，本机 `/mnt/data` 理论上够但余量较紧，建议减小批次：
+
+```bash
+python scripts/data/prepare_task1_full_dataset.py run \
+  --data-root /mnt/data/kuavo_tianchi \
+  --batch-max-gib 40 \
+  --keep-raw \
+  --max-workers 8 \
+  --v21-env kdc \
+  --v30-env kdc_icra \
+  --upload \
+  --remote pi1022:/data/vepfs/users/intern/lingyue.yang/datasets/kuavo_tianchi
+```
+
+只校验本机转换结果：
+
+```bash
+python scripts/data/prepare_task1_full_dataset.py verify \
+  --data-root /mnt/data/kuavo_tianchi
+```
+
+输出路径：
+
+```bash
+/mnt/data/kuavo_tianchi/lerobot_v21_task1_full/task1_zhuomian/lerobot
+/mnt/data/kuavo_tianchi/lerobot_v30_task1_full/task1_zhuomian/lerobot
+pi1022:$REMOTE_DATA/lerobot_v21_task1_full/task1_zhuomian/lerobot
+pi1022:$REMOTE_DATA/lerobot_v30_task1_full/task1_zhuomian/lerobot
+```
 
 ### 6. 开发机训练 ACT 15 epoch
 
@@ -146,6 +259,18 @@ conda run -n base conda-pack -n kdc_icra -o myenv.tar.gz --force --ignore-editab
 ls -lh myenv.tar.gz outputs/train/task1_zhuomian/act_real50_smoke/run_real50_15ep_20260622_135333/epoch15/model.safetensors
 ```
 
+拉回 Docker build 文件：
+
+```bash
+rsync -avh --info=progress2 \
+  pi1022:/data/vepfs/users/intern/lingyue.yang/kuavo_data_challenge/myenv.tar.gz \
+  ./myenv.tar.gz
+mkdir -p outputs/train/task1_zhuomian/act_real50_smoke
+rsync -avh --info=progress2 \
+  pi1022:/data/vepfs/users/intern/lingyue.yang/kuavo_data_challenge/outputs/train/task1_zhuomian/act_real50_smoke/run_real50_15ep_20260622_135333/ \
+  outputs/train/task1_zhuomian/act_real50_smoke/run_real50_15ep_20260622_135333/
+```
+
 有 Docker 权限的机器执行：
 
 ```bash
@@ -158,10 +283,115 @@ docker save -o kdc_task1_act_smoke.tar kdc_task1_act_smoke
 容器内最小校验：
 
 ```bash
-docker run --rm --net=host kdc_task1_act_smoke bash -lc 'source /opt/ros/noetic/setup.bash && source /root/kuavo_data_challenge/myenv/bin/activate && cd /root/kuavo_data_challenge && PYTHONPATH=$PWD:$PWD/kuavo_train python -c "from pathlib import Path; from kuavo_deploy.config import load_kuavo_config; from kuavo_train.wrapper.policy.act.ACTPolicyWrapper import CustomACTPolicyWrapper; cfg=load_kuavo_config(\"configs/deploy/kuavo_real_task1_act_smoke.yaml\"); p=Path(\"outputs/train\")/cfg.inference.task/cfg.inference.method/cfg.inference.timestamp/f\"epoch{cfg.inference.epoch}\"; print(cfg.env.env_name, cfg.env.eef_type, cfg.env.image_size, p.exists()); policy=CustomACTPolicyWrapper.from_pretrained(p, strict=True); print(policy.config.n_obs_steps, policy.config.chunk_size)"'
+docker run --rm -i --net=host kdc_task1_act_smoke bash <<'SH'
+source /opt/ros/noetic/setup.bash
+source /root/kuavo_data_challenge/myenv/bin/activate
+cd /root/kuavo_data_challenge
+PYTHONPATH=$PWD:$PWD/kuavo_train:${PYTHONPATH:-} python - <<'PY'
+from pathlib import Path
+from kuavo_deploy.config import load_kuavo_config
+from kuavo_train.wrapper.policy.act.ACTPolicyWrapper import CustomACTPolicyWrapper
+
+cfg = load_kuavo_config("configs/deploy/kuavo_env.yaml")
+assert cfg.env.env_name == "Kuavo-Real"
+assert cfg.env.which_arm == "right"
+assert cfg.env.eef_type == "leju_claw"
+assert list(cfg.env.image_size) == [848, 480]
+assert cfg.env.obs_key_map["joint_q"]["handle"]["params"]["slice"] == [[12, 19], [19, 26]]
+assert cfg.env.obs_key_map["gripper"]["handle"]["params"]["slice"] == [[0, 1], [1, 2]]
+
+p = Path("outputs/train") / cfg.inference.task / cfg.inference.method / cfg.inference.timestamp / f"epoch{cfg.inference.epoch}"
+assert p.exists() and (p / "model.safetensors").exists()
+policy = CustomACTPolicyWrapper.from_pretrained(p, strict=True)
+assert policy.config.n_obs_steps == 1
+assert policy.config.chunk_size == 100
+print("config_policy_ok", cfg.env.env_name, cfg.env.which_arm, cfg.env.eef_type, cfg.env.image_size)
+PY
+SH
 ```
 
-输出应包含：`Kuavo-Real leju_claw [848, 480] True` 和 `1 100`。镜像内已预缓存 `resnet18-f37072fd.pth`，校验时不需要临时下载 backbone 权重。
+输出应包含：`config_policy_ok Kuavo-Real right leju_claw [848, 480]`。镜像内已预缓存 `resnet18-f37072fd.pth`，校验时不需要临时下载 backbone 权重。
+
+FAQ 对部署推理缺 `pyaudio` 的说明：镜像/环境里需要先有 `portaudio19-dev` 等系统依赖，再安装 `pyaudio`。提交前额外检查 SDK 导入链路：
+
+```bash
+docker run --rm --net=host kdc_task1_act_smoke bash -lc 'source /opt/ros/noetic/setup.bash && source /root/kuavo_data_challenge/myenv/bin/activate && cd /root/kuavo_data_challenge && PYTHONPATH=$PWD:$PWD/kuavo_train:${PYTHONPATH:-} python -c "import pyaudio, msgpack, websockets, zmq; from kuavo_humanoid_sdk import KuavoSDK, KuavoRobot, KuavoRobotState, DexterousHand; from kuavo_deploy.kuavo_env.KuavoBaseRosEnv import KuavoBaseRosEnv; print(\"sdk_import_ok\")"'
+```
+
+提交前踩坑清单：
+
+- 真机部署配置必须写在 `configs/deploy/kuavo_env.yaml`，`run_with_gpu.sh` 的默认 `KDC_CONFIG` 也必须指向这个文件。
+- Task1 是右手单手任务，`kuavo_env.yaml` 里必须是 `which_arm: right`；如果沿用双臂 ACT checkpoint，保留 `policy_which_arm: both` 只用于兼容模型的 16 维 state/action，执行时会只取右臂动作。
+- 依赖必须能导入：`pyaudio`、`msgpack`、`websockets`、`zmq`；其中 `pyaudio` 需要系统包 `portaudio19-dev`，`zmq` 由 `pyzmq` 提供。
+- 提交 zip 根目录只能有 `kdc_task1_act_smoke.tar` 和 `run_with_gpu.sh` 两个文件。
+
+### 8. 打 zip 并上传 OSS
+!!!!!!
+注意修改 run_with_gpu.sh 中的docker镜像名称为你刚刚打包的真机赛镜像名称
+！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！
+https://kdc-doc.netlify.app/tianchi/cn/pages/faq  看一下手册里的常见问题，对比一下，再提交
+！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！
+
+提交 zip 根目录必须有两个文件：`kdc_task1_act_smoke.tar` 和 `run_with_gpu.sh`。
+
+```bash
+test ! -f kdc_task1_act_smoke.zip || mv kdc_task1_act_smoke.zip kdc_task1_act_smoke.zip.bak.$(date +%Y%m%d_%H%M%S)
+mkdir -p dist/kdc_task1_act_smoke_submit
+
+docker save -o dist/kdc_task1_act_smoke_submit/kdc_task1_act_smoke.tar kdc_task1_act_smoke:latest
+
+cat > dist/kdc_task1_act_smoke_submit/run_with_gpu.sh <<'SH'
+#!/bin/bash
+set -e
+IMAGE_NAME="${IMAGE_NAME:-kdc_task1_act_smoke}"
+CONTAINER_NAME="${CONTAINER_NAME:-$IMAGE_NAME}"
+IMAGE_TAR="${IMAGE_TAR:-${IMAGE_NAME}.tar}"
+KDC_CONFIG="${KDC_CONFIG:-configs/deploy/kuavo_env.yaml}"
+if [ "$(docker ps -aq -f name=${CONTAINER_NAME})" ]; then docker rm -f "${CONTAINER_NAME}"; fi
+if [ "$(docker images -q "${IMAGE_NAME}")" ]; then docker rmi -f "${IMAGE_NAME}"; fi
+docker load -i "${IMAGE_TAR}"
+docker run --gpus all -it --net=host \
+  -e ROS_MASTER_URI=http://kuavo_master:11311 \
+  -e ROS_IP=192.168.26.10 \
+  -e KDC_CONFIG="${KDC_CONFIG}" \
+  --name "${CONTAINER_NAME}" \
+  "${IMAGE_NAME}" bash
+SH
+chmod +x dist/kdc_task1_act_smoke_submit/run_with_gpu.sh
+
+(cd dist/kdc_task1_act_smoke_submit && zip -0 -T ../../kdc_task1_act_smoke.zip kdc_task1_act_smoke.tar run_with_gpu.sh)
+unzip -l kdc_task1_act_smoke.zip
+```
+
+期望 zip 内容只有这两个文件：
+
+```text
+kdc_task1_act_smoke.tar
+run_with_gpu.sh
+```
+
+Linux/Mac 模板：
+
+```bash
+./ossutil cp localFilePath oss://${bucket}/${path}/ossFileName -i ${accessKeyId} -k ${accessKeySecret} --endpoint=${endpoint} --sts-token=${securityToken}
+```
+
+实际上传命令不要把 AK/SK/token 写入仓库，实时复制到环境变量后执行：
+```bash
+export OSS_AK='实时获取的 accessKeyId'
+export OSS_SK='实时获取的 accessKeySecret'
+export OSS_STS_TOKEN='实时获取的 securityToken'
+export OSS_ENDPOINT='oss-cn-hangzhou.aliyuncs.com'
+export OSS_URI='oss://tianchi-race-upload/result/race/532415/1754/1313451/1095280909904/1782216775492_kdc_task1_act_smoke.zip'
+
+ossutil cp kdc_task1_act_smoke.zip "$OSS_URI" -f \
+  -i "$OSS_AK" \
+  -k "$OSS_SK" \
+  --endpoint="$OSS_ENDPOINT" \
+  --sts-token="$OSS_STS_TOKEN" \
+  --checkpoint-dir=/tmp/ossutil-checkpoint-kdc-task1
+```
+注意：AK 和 token 有效期约 1 小时，上传前实时获取；多次上传使用相同 `OSS_URI` 覆盖。部分 STS 只允许上传，可能不允许 `stat/ls` 查询。
 
 启动镜像：
 
@@ -172,5 +402,5 @@ bash docker/run_with_gpu.sh
 容器内运行 task1 真机配置：
 
 ```bash
-python kuavo_deploy/src/scripts/script.py --task run --config configs/deploy/kuavo_real_task1_act_smoke.yaml
+python kuavo_deploy/src/scripts/script.py --task run --config configs/deploy/kuavo_env.yaml
 ```

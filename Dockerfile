@@ -5,13 +5,15 @@ FROM ros:noetic-ros-core-focal AS builder
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-# 国内APT源
-RUN sed -i 's/archive.ubuntu.com/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list && \
-    sed -i 's/security.ubuntu.com/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list
+# Keep the base Ubuntu/ROS apt sources and add retries for flaky mirrors.
+RUN printf 'Acquire::Retries "5";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' \
+    > /etc/apt/apt.conf.d/80-retries
 
 # 安装必要工具和ROS依赖
 RUN apt-get update && apt-get install -y \
     curl wget git gnupg2 lsb-release sudo ca-certificates build-essential bzip2 \
+    python3-dev \
+    portaudio19-dev \
     ros-noetic-cv-bridge \
     ros-noetic-apriltag-ros \
     && rm -rf /var/lib/apt/lists/*
@@ -44,7 +46,7 @@ RUN if [ -f "myenv.tar.gz" ]; then \
         conda-unpack && \
         pip install -e . && \
         cd ./third_party/lerobot && pip install -e . && \
-        pip install deprecated==1.3.1 kuavo_humanoid_sdk==1.3.3 opencv-python==4.12.0.88 opencv-python-headless==4.12.0.88 numpy==2.2.6 msgpack==1.1.2 websockets==15.0.1 && \
+        pip install deprecated==1.3.1 kuavo_humanoid_sdk==1.3.3 opencv-python==4.12.0.88 opencv-python-headless==4.12.0.88 numpy==2.2.6 msgpack==1.1.2 websockets==15.0.1 pyaudio==0.2.14 pyzmq==27.1.0 && \
         conda clean -afy && \
         rm -rf ./myenv/lib/python*/site-packages/*/tests ./myenv/lib/python*/site-packages/*/test ./myenv/pkgs/* \
     "
@@ -72,6 +74,16 @@ FROM ros:noetic-ros-core-focal
 # 设置工作目录
 WORKDIR /root/kuavo_data_challenge
 
+RUN printf 'Acquire::Retries "5";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' \
+    > /etc/apt/apt.conf.d/80-retries && \
+    apt-get update && apt-get install -y \
+    ros-noetic-cv-bridge \
+    ros-noetic-apriltag-ros \
+    portaudio19-dev \
+    libgl1 \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
 # 复制 Conda 环境和项目代码
 COPY --from=builder /opt/conda /opt/conda
 COPY --from=builder /root/kuavo_data_challenge /root/kuavo_data_challenge
@@ -82,13 +94,6 @@ ENV PATH="/opt/conda/bin:${PATH}"
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 ENV OPENPI_PYTHON=/opt/conda/envs/openpi/bin/python
-
-RUN apt-get update && apt-get install -y \
-    ros-noetic-cv-bridge \
-    ros-noetic-apriltag-ros \
-    libgl1 \
-    libglib2.0-0 \
-    && rm -rf /var/lib/apt/lists/*
 
 # 保留 ROS 环境变量
 ENV ROS_MASTER_URI=http://kuavo_master:11311

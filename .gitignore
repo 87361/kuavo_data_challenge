@@ -218,3 +218,5 @@ ana.py
 *.tar
 error.txt
 obs.png
+*_piper_repo.md
+*.zip
