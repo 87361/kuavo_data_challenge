@@ -82,7 +82,7 @@ button:disabled {
 
 .topbar {
   display: grid;
-  grid-template-columns: 148px minmax(260px, 1fr) 72px 220px minmax(160px, 260px);
+  grid-template-columns: 148px minmax(260px, 1fr) 72px minmax(300px, 420px) minmax(160px, 260px);
   gap: 10px;
   align-items: center;
   padding: 8px 14px;
@@ -102,6 +102,33 @@ button:disabled {
   color: var(--muted);
   font-size: 13px;
   text-align: right;
+}
+
+.episode-nav {
+  display: grid;
+  grid-template-columns: 34px minmax(76px, 96px) 34px minmax(116px, 1fr);
+  gap: 7px;
+  align-items: center;
+  min-width: 0;
+}
+
+.episode-nav button {
+  width: 34px;
+  padding: 0;
+}
+
+.episode-jump {
+  width: 100%;
+  min-width: 0;
+}
+
+.episode-indicator {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .viewer {
@@ -212,7 +239,7 @@ button:disabled {
 
 .side-panel {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   gap: 10px;
   min-width: 0;
   min-height: 0;
@@ -246,10 +273,64 @@ button:disabled {
   font-size: 15px;
 }
 
+.metric.compact {
+  gap: 4px;
+  padding: 7px 8px;
+}
+
+.metric.compact strong {
+  font-size: 13px;
+}
+
 .panel-title {
   font-size: 13px;
   font-weight: 700;
   color: var(--text);
+}
+
+.progress-panel {
+  display: grid;
+  align-content: start;
+  gap: 9px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.annotation-progress {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: #111417;
+  border: 1px solid var(--line);
+}
+
+.annotation-progress div {
+  width: 0%;
+  height: 100%;
+  background: linear-gradient(90deg, var(--green), var(--blue));
+  transition: width 160ms ease;
+}
+
+.progress-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+}
+
+.progress-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.progress-status {
+  min-height: 18px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .analysis-panel {

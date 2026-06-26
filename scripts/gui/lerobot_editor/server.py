@@ -4,6 +4,7 @@ import argparse
 import mimetypes
 import os
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +56,14 @@ class ExportRequest(BaseModel):
     urdf_path: str | None = None
 
 
+class ProgressSaveRequest(BaseModel):
+    last_export_path: str | None = None
+
+
+class EpisodeProgressRequest(BaseModel):
+    completed: bool
+
+
 class CoverageAnalysisRequest(BaseModel):
     window_seconds: float = 1.0
     cluster_count: int | str = "auto"
@@ -99,6 +108,9 @@ class AppState:
         self.max_transition_frames = 20
         self.dataset: LeRobotV21Dataset | None = None
         self.edits: dict[str, Any] = {}
+        self.completed_episodes: set[int] = set()
+        self.progress_saved_at: str | None = None
+        self.last_export_path: str | None = None
         self.export_job = ExportJob()
         self.analysis_job = AnalysisJob()
 
@@ -111,6 +123,115 @@ class AppState:
 state = AppState()
 app = FastAPI(title="LeRobot v2.1 Editor")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+def _progress_path(dataset: LeRobotV21Dataset) -> Path:
+    return dataset.root / ".lerobot_editor" / "progress.json"
+
+
+def _normalize_progress_edits(dataset: LeRobotV21Dataset, edits: dict[str, Any] | None) -> dict[str, Any]:
+    normalized: dict[str, Any] = {}
+    for key, edit in (edits or {}).items():
+        try:
+            episode_index = int(key)
+        except (TypeError, ValueError):
+            continue
+        if episode_index < 0 or episode_index >= len(dataset.episodes):
+            continue
+        value = normalize_episode_edit(edit, dataset.episode_length(episode_index))
+        if value["cuts"] or value["deleted_segments"]:
+            normalized[str(episode_index)] = value
+    return normalized
+
+
+def _normalize_completed_episodes(dataset: LeRobotV21Dataset, episodes: Any) -> set[int]:
+    completed: set[int] = set()
+    for item in episodes or []:
+        try:
+            episode_index = int(item)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= episode_index < len(dataset.episodes):
+            completed.add(episode_index)
+    return completed
+
+
+def _progress_payload(dataset: LeRobotV21Dataset) -> dict[str, Any]:
+    pending_export_episodes = _pending_export_episodes(dataset)
+    return {
+        "source_dataset": str(dataset.root),
+        "saved_at": state.progress_saved_at,
+        "edits": state.edits,
+        "completed_episodes": sorted(state.completed_episodes),
+        "completed_count": len(state.completed_episodes),
+        "edited_count": len(state.edits),
+        "pending_export_episodes": pending_export_episodes,
+        "pending_export_count": len(pending_export_episodes),
+        "total_episodes": len(dataset.episodes),
+        "last_export_path": state.last_export_path,
+    }
+
+
+def _pending_export_episodes(dataset: LeRobotV21Dataset) -> list[int]:
+    if not state.last_export_path:
+        return sorted(int(key) for key in state.edits)
+    manifest_path = Path(state.last_export_path).expanduser().resolve() / "edit_manifest.json"
+    if not manifest_path.exists():
+        return sorted(int(key) for key in state.edits)
+    try:
+        import json
+
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return sorted(int(key) for key in state.edits)
+    if manifest.get("source_dataset") != str(dataset.root):
+        return sorted(int(key) for key in state.edits)
+
+    pending: list[int] = []
+    exported = manifest.get("episodes") or {}
+    for episode_index in range(len(dataset.episodes)):
+        current = normalize_episode_edit(state.edits.get(str(episode_index)), dataset.episode_length(episode_index))
+        entry = exported.get(str(episode_index)) or {}
+        exported_edit = {
+            "cuts": entry.get("cuts", []),
+            "deleted_segments": entry.get("deleted_segments", []),
+        }
+        if current != exported_edit:
+            pending.append(episode_index)
+    return pending
+
+
+def _load_progress(dataset: LeRobotV21Dataset) -> None:
+    state.edits = {}
+    state.completed_episodes = set()
+    state.progress_saved_at = None
+    state.last_export_path = None
+    path = _progress_path(dataset)
+    if not path.exists():
+        return
+    try:
+        import json
+
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if payload.get("source_dataset") not in (None, str(dataset.root)):
+        return
+    state.edits = _normalize_progress_edits(dataset, payload.get("edits"))
+    state.completed_episodes = _normalize_completed_episodes(dataset, payload.get("completed_episodes"))
+    state.progress_saved_at = payload.get("saved_at")
+    state.last_export_path = payload.get("last_export_path")
+
+
+def _save_progress(dataset: LeRobotV21Dataset) -> dict[str, Any]:
+    import json
+
+    state.progress_saved_at = datetime.now(timezone.utc).isoformat()
+    payload = _progress_payload(dataset)
+    path = _progress_path(dataset)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return payload
 
 
 @app.get("/")
@@ -130,7 +251,7 @@ def api_open(req: OpenRequest) -> dict[str, Any]:
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     state.dataset = dataset
-    state.edits = {}
+    _load_progress(dataset)
     state.analysis_job.reset()
     return {
         "path": str(dataset.root),
@@ -149,6 +270,7 @@ def api_open(req: OpenRequest) -> dict[str, Any]:
             }
             for row in dataset.episodes
         ],
+        "progress": _progress_payload(dataset),
     }
 
 
@@ -247,6 +369,32 @@ def api_cuts(req: CutsRequest) -> dict[str, Any]:
     }
 
 
+@app.get("/api/progress")
+def api_progress() -> dict[str, Any]:
+    dataset = state.require_dataset()
+    return _progress_payload(dataset)
+
+
+@app.post("/api/progress/save")
+def api_progress_save(req: ProgressSaveRequest) -> dict[str, Any]:
+    dataset = state.require_dataset()
+    if req.last_export_path is not None:
+        state.last_export_path = req.last_export_path
+    return _save_progress(dataset)
+
+
+@app.post("/api/progress/episode/{episode_index}")
+def api_episode_progress(episode_index: int, req: EpisodeProgressRequest) -> dict[str, Any]:
+    dataset = state.require_dataset()
+    if episode_index < 0 or episode_index >= len(dataset.episodes):
+        raise HTTPException(status_code=404, detail="episode not found")
+    if req.completed:
+        state.completed_episodes.add(episode_index)
+    else:
+        state.completed_episodes.discard(episode_index)
+    return _progress_payload(dataset)
+
+
 def _run_export(req: ExportRequest) -> None:
     try:
         dataset = state.require_dataset()
@@ -278,6 +426,8 @@ def _run_export(req: ExportRequest) -> None:
             video_codec=req.video_codec,
             progress=progress,
         )
+        state.last_export_path = req.output_path
+        _save_progress(dataset)
         state.export_job.update(status="complete", message="export complete", progress=1.0, manifest=manifest)
     except Exception as exc:
         state.export_job.update(status="failed", message="export failed", error=str(exc))

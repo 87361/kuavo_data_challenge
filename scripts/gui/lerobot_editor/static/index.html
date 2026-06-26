@@ -12,7 +12,12 @@
         <div class="brand">LeRobot Editor</div>
         <select id="datasetSelect" class="field dataset-field"></select>
         <button id="loadDataset" class="primary">Load</button>
-        <select id="episodeSelect" class="field episode-field"></select>
+        <div class="episode-nav">
+          <button id="prevEpisode" title="Previous episode">&lt;</button>
+          <input id="episodeJump" class="field episode-jump" type="number" min="0" step="1" value="0" title="Episode index" />
+          <button id="nextEpisode" title="Next episode">&gt;</button>
+          <span id="episodeIndicator" class="episode-indicator">Episode - / -</span>
+        </div>
         <div id="statusText" class="status">Idle</div>
       </header>
 
@@ -41,6 +46,35 @@
               <span>Segment</span>
               <strong id="segmentMetric">-</strong>
             </div>
+          </div>
+          <div class="progress-panel">
+            <div class="panel-title">Annotation</div>
+            <div class="annotation-progress">
+              <div id="annotationProgressBar"></div>
+            </div>
+            <div class="progress-grid">
+              <div class="metric compact">
+                <span>Completed</span>
+                <strong id="completedMetric">0 / 0</strong>
+              </div>
+              <div class="metric compact">
+                <span>Edited</span>
+                <strong id="editedMetric">0</strong>
+              </div>
+              <div class="metric compact">
+                <span>Pending Export</span>
+                <strong id="pendingExportMetric">0</strong>
+              </div>
+              <div class="metric compact">
+                <span>Saved</span>
+                <strong id="savedMetric">-</strong>
+              </div>
+            </div>
+            <div class="progress-actions">
+              <button id="markComplete" class="primary">Mark Complete</button>
+              <button id="saveProgress">Save Progress</button>
+            </div>
+            <div id="progressStatus" class="progress-status">Not loaded</div>
           </div>
           <div class="analysis-panel">
             <div class="panel-title">Coverage Analysis</div>
@@ -97,6 +131,6 @@
         </div>
       </section>
     </main>
-    <script src="/static/app.js"></script>
+    <script type="module" src="/static/app.js"></script>
   </body>
 </html>

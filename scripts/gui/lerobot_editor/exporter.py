@@ -84,6 +84,10 @@ def _to_jsonable(value: Any) -> Any:
     return value
 
 
+def _jsonable_equal(left: Any, right: Any) -> bool:
+    return _to_jsonable(left) == _to_jsonable(right)
+
+
 def _numeric_stats(values: np.ndarray) -> dict[str, list[Any]]:
     arr = np.asarray(values)
     if arr.ndim == 1:
@@ -219,6 +223,77 @@ def _write_dataframe_like_source(df: pd.DataFrame, source_parquet: Path, output_
     pq.write_table(table, output_parquet, compression="snappy")
 
 
+def _episode_output_parquet(dataset: LeRobotV21Dataset, output_root: Path, episode_index: int) -> Path:
+    return (
+        output_root
+        / "data"
+        / f"chunk-{dataset.episode_chunk(episode_index):03d}"
+        / f"episode_{episode_index:06d}.parquet"
+    )
+
+
+def _episode_output_video(dataset: LeRobotV21Dataset, output_root: Path, episode_index: int, video_key: str) -> Path:
+    return (
+        output_root
+        / "videos"
+        / f"chunk-{dataset.episode_chunk(episode_index):03d}"
+        / video_key
+        / f"episode_{episode_index:06d}.mp4"
+    )
+
+
+def _episode_output_files_exist(dataset: LeRobotV21Dataset, output_root: Path, episode_index: int) -> bool:
+    if not _episode_output_parquet(dataset, output_root, episode_index).exists():
+        return False
+    return all(_episode_output_video(dataset, output_root, episode_index, key).exists() for key in dataset.video_keys)
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _clear_directory(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    for child in path.iterdir():
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+
+
+def _manifest_starts(manifest: dict[str, Any]) -> dict[int, int]:
+    starts: dict[int, int] = {}
+    running = 0
+    for key in sorted((manifest.get("episodes") or {}), key=lambda item: int(item)):
+        entry = manifest["episodes"][key]
+        starts[int(key)] = int(entry.get("global_start_index", running))
+        running += int(entry.get("output_length") or 0)
+    return starts
+
+
+def _load_stats_by_episode(path: Path) -> dict[int, dict[str, Any]]:
+    return {int(row["episode_index"]): row.get("stats", {}) for row in read_jsonl(path)}
+
+
+def _read_output_dataframe(path: Path) -> pd.DataFrame:
+    return pq.read_table(path).to_pandas()
+
+
+def _reindex_output_dataframe(
+    df: pd.DataFrame,
+    fps: int | float,
+    episode_index: int,
+    global_start_index: int,
+) -> pd.DataFrame:
+    output_df = df.copy()
+    for frame_index in range(len(output_df)):
+        output_df.at[frame_index, "frame_index"] = int(frame_index)
+        output_df.at[frame_index, "timestamp"] = float(frame_index) / float(fps)
+        output_df.at[frame_index, "episode_index"] = int(episode_index)
+        output_df.at[frame_index, "index"] = int(global_start_index + frame_index)
+    return output_df
+
+
 class StreamingVideoReader:
     def __init__(self, input_path: Path):
         self.container = av.open(str(input_path))
@@ -322,13 +397,7 @@ def copy_or_encode_videos(
     unchanged = not normalized["cuts"] and not normalized["deleted_segments"]
     for video_key in dataset.video_keys:
         source = dataset.video_path(episode_index, video_key)
-        target = (
-            output_root
-            / "videos"
-            / f"chunk-{dataset.episode_chunk(episode_index):03d}"
-            / video_key
-            / f"episode_{episode_index:06d}.mp4"
-        )
+        target = _episode_output_video(dataset, output_root, episode_index, video_key)
         target.parent.mkdir(parents=True, exist_ok=True)
         if unchanged:
             shutil.copy2(source, target)
@@ -349,56 +418,125 @@ def export_v21_dataset(
 ) -> dict[str, Any]:
     dataset = load_v21_dataset(source_root)
     output = Path(output_root).expanduser().resolve()
-    if output.exists() and any(output.iterdir()):
-        raise FileExistsError(f"output directory must be empty: {output}")
+    if output == dataset.root:
+        raise ValueError("output directory must be different from the source dataset")
     output.mkdir(parents=True, exist_ok=True)
 
     fk = SimpleArmFk(urdf_path) if urdf_path is not None else None
     codec = choose_video_codec(video_codec)
+    resolved_urdf = str(Path(urdf_path).expanduser().resolve()) if urdf_path is not None else None
+    transition_config = {
+        "mode": "adaptive_eef_distance" if fk is not None else "fixed_frame_count",
+        "step_m": transition_step_m,
+        "min_frames": min_transition_frames,
+        "max_frames": max_transition_frames,
+        "video_crossfade": "endpoint_alpha_blend",
+        "state_action": "linear_interpolation",
+    }
+
+    manifest_path = output / "edit_manifest.json"
+    previous_manifest: dict[str, Any] | None = None
+    if manifest_path.exists():
+        previous_manifest = _read_json(manifest_path)
+        settings_match = (
+            previous_manifest.get("source_dataset") == str(dataset.root)
+            and previous_manifest.get("format") == "lerobot_v2.1"
+            and previous_manifest.get("urdf_path") == resolved_urdf
+            and previous_manifest.get("transition") == transition_config
+            and previous_manifest.get("video_codec") == codec
+            and previous_manifest.get("video_keys") == dataset.video_keys
+        )
+        if not settings_match:
+            if progress:
+                progress({"message": "refreshing output because export settings changed", "progress": 0.0})
+            _clear_directory(output)
+            previous_manifest = None
+    elif any(output.iterdir()):
+        raise FileExistsError(f"output directory is not an editor export workspace: {output}")
 
     source_stats_rows = {
         int(row["episode_index"]): row.get("stats", {})
         for row in read_jsonl(dataset.root / "meta" / "episodes_stats.jsonl")
     }
+    previous_stats_rows = _load_stats_by_episode(output / "meta" / "episodes_stats.jsonl") if previous_manifest else {}
+    previous_starts = _manifest_starts(previous_manifest) if previous_manifest else {}
+    previous_episodes = previous_manifest.get("episodes", {}) if previous_manifest else {}
+
     total = len(dataset.episodes)
     global_frame = 0
     output_episodes: list[dict[str, Any]] = []
     output_stats: list[dict[str, Any]] = []
     manifest_episodes: dict[str, Any] = {}
+    regenerated_episodes: list[int] = []
+    reindexed_episodes: list[int] = []
 
     for episode_index, episode in enumerate(dataset.episodes):
+        length = int(episode["length"])
+        edit = normalize_episode_edit(edits.get(str(episode_index)), length)
+        previous_entry = previous_episodes.get(str(episode_index))
+        previous_edit = (
+            {
+                "cuts": previous_entry.get("cuts", []),
+                "deleted_segments": previous_entry.get("deleted_segments", []),
+            }
+            if previous_entry
+            else None
+        )
+        dirty = (
+            previous_entry is None
+            or not _jsonable_equal(previous_edit, edit)
+            or not _episode_output_files_exist(dataset, output, episode_index)
+        )
+        previous_start = previous_starts.get(episode_index)
+        needs_reindex = not dirty and previous_start != global_frame
+
         if progress:
+            action = "exporting" if dirty else ("reindexing" if needs_reindex else "checking")
             progress(
                 {
-                    "message": f"exporting episode {episode_index + 1}/{total}",
+                    "message": f"{action} episode {episode_index + 1}/{total}",
                     "progress": episode_index / max(1, total),
                 }
             )
-        length = int(episode["length"])
-        edit = normalize_episode_edit(edits.get(str(episode_index)), length)
-        source_df = dataset.read_episode_dataframe(episode_index)
-        output_df, transitions = build_output_dataframe(
-            source_df=source_df,
-            edit=edit,
-            fps=dataset.fps,
-            episode_index=episode_index,
-            global_start_index=global_frame,
-            fk=fk,
-            transition_step_m=transition_step_m,
-            min_transition_frames=min_transition_frames,
-            max_transition_frames=max_transition_frames,
-        )
 
-        output_parquet = (
-            output
-            / "data"
-            / f"chunk-{dataset.episode_chunk(episode_index):03d}"
-            / f"episode_{episode_index:06d}.parquet"
-        )
-        _write_dataframe_like_source(output_df, dataset.parquet_path(episode_index), output_parquet)
-        copy_or_encode_videos(dataset, output, episode_index, edit, transitions, codec)
+        output_parquet = _episode_output_parquet(dataset, output, episode_index)
+        if dirty:
+            source_df = dataset.read_episode_dataframe(episode_index)
+            output_df, transitions = build_output_dataframe(
+                source_df=source_df,
+                edit=edit,
+                fps=dataset.fps,
+                episode_index=episode_index,
+                global_start_index=global_frame,
+                fk=fk,
+                transition_step_m=transition_step_m,
+                min_transition_frames=min_transition_frames,
+                max_transition_frames=max_transition_frames,
+            )
+            _write_dataframe_like_source(output_df, dataset.parquet_path(episode_index), output_parquet)
+            copy_or_encode_videos(dataset, output, episode_index, edit, transitions, codec)
+            stats = compute_episode_stats(output_df, dataset.info, source_stats_rows.get(episode_index))
+            regenerated_episodes.append(episode_index)
+        else:
+            transitions = list(previous_entry.get("transitions", []))
+            if needs_reindex:
+                output_df = _reindex_output_dataframe(
+                    _read_output_dataframe(output_parquet),
+                    dataset.fps,
+                    episode_index,
+                    global_frame,
+                )
+                _write_dataframe_like_source(output_df, dataset.parquet_path(episode_index), output_parquet)
+                stats = compute_episode_stats(output_df, dataset.info, source_stats_rows.get(episode_index))
+                reindexed_episodes.append(episode_index)
+            elif episode_index in previous_stats_rows:
+                output_df = None
+                stats = previous_stats_rows[episode_index]
+            else:
+                output_df = _read_output_dataframe(output_parquet)
+                stats = compute_episode_stats(output_df, dataset.info, source_stats_rows.get(episode_index))
 
-        new_length = int(len(output_df))
+        new_length = int(previous_entry["output_length"]) if not dirty and output_df is None else int(len(output_df))
         output_episodes.append(
             {
                 "episode_index": int(episode_index),
@@ -409,12 +547,13 @@ def export_v21_dataset(
         output_stats.append(
             {
                 "episode_index": int(episode_index),
-                "stats": compute_episode_stats(output_df, dataset.info, source_stats_rows.get(episode_index)),
+                "stats": stats,
             }
         )
         manifest_episodes[str(episode_index)] = {
             "source_length": length,
             "output_length": new_length,
+            "global_start_index": global_frame,
             "cuts": edit["cuts"],
             "deleted_segments": edit["deleted_segments"],
             "deleted_ranges": deleted_ranges(length, edit["cuts"], edit["deleted_segments"]),
@@ -445,16 +584,12 @@ def export_v21_dataset(
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "format": "lerobot_v2.1",
         "fps": dataset.fps,
-        "urdf_path": str(Path(urdf_path).expanduser().resolve()) if urdf_path is not None else None,
-        "transition": {
-            "mode": "adaptive_eef_distance" if fk is not None else "fixed_frame_count",
-            "step_m": transition_step_m,
-            "min_frames": min_transition_frames,
-            "max_frames": max_transition_frames,
-            "video_crossfade": "endpoint_alpha_blend",
-            "state_action": "linear_interpolation",
-        },
+        "urdf_path": resolved_urdf,
+        "transition": transition_config,
         "video_codec": codec,
+        "video_keys": dataset.video_keys,
+        "regenerated_episodes": regenerated_episodes,
+        "reindexed_episodes": reindexed_episodes,
         "episodes": manifest_episodes,
     }
     (output / "edit_manifest.json").write_text(
