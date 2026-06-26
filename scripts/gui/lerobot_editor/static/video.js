@@ -46,6 +46,13 @@ export function createVideoController(ctx) {
     }
   }
 
+  function applyMediaAspect(tile, width, height) {
+    const w = Number(width);
+    const h = Number(height);
+    if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return;
+    tile.style.setProperty("--camera-aspect", `${w} / ${h}`);
+  }
+
   function syncVideosToFrame(frame, force = false) {
     const target = ctx.frames.frameToTime(frame);
     const tolerance = 0.5 / ctx.frames.fps();
@@ -82,11 +89,18 @@ export function createVideoController(ctx) {
     if (state.cameraFractions.length !== cameras.length) {
       state.cameraFractions = getCameraFractions(cameras.length);
     }
+    const stacked = getComputedStyle(els.videoGrid).flexDirection === "column";
     cameras.forEach((camera, index) => {
       const fraction = state.cameraFractions[index] || 1 / cameras.length;
-      camera.style.flexGrow = String(fraction);
-      camera.style.flexShrink = "1";
-      camera.style.flexBasis = "0";
+      if (stacked) {
+        camera.style.flexGrow = "0";
+        camera.style.flexShrink = "0";
+        camera.style.flexBasis = "auto";
+      } else {
+        camera.style.flexGrow = String(fraction);
+        camera.style.flexShrink = "1";
+        camera.style.flexBasis = "0";
+      }
     });
     if (save) localStorage.setItem(STORAGE.cameraFractions, JSON.stringify(state.cameraFractions));
   }
@@ -166,6 +180,7 @@ export function createVideoController(ctx) {
       fallback.alt = key;
 
       video.addEventListener("loadedmetadata", () => {
+        applyMediaAspect(tile, video.videoWidth, video.videoHeight);
         const pending = Number(video.dataset.pendingFrame || state.currentFrame);
         delete video.dataset.pendingFrame;
         syncVideosToFrame(pending, true);
@@ -175,6 +190,9 @@ export function createVideoController(ctx) {
         tile.classList.add("video-failed");
         renderFrameFallbacks();
         setStatus(`Browser video decode failed for ${key}; using frame fallback`);
+      });
+      fallback.addEventListener("load", () => {
+        applyMediaAspect(tile, fallback.naturalWidth, fallback.naturalHeight);
       });
 
       stage.appendChild(video);
@@ -305,5 +323,6 @@ export function createVideoController(ctx) {
     syncVideosToFrame,
     stopPlayback,
     playPause,
+    updateCameraLayout: () => applyCameraFractions(false),
   };
 }

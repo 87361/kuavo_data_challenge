@@ -22,11 +22,9 @@
       </header>
 
       <section id="viewer" class="viewer">
-        <div id="videoGrid" class="video-grid"></div>
-        <div id="viewerResizeHandle" class="pane-resize-handle vertical" title="Resize panels"></div>
-        <aside class="side-panel">
-          <div class="inspector">
-            <div class="metric">
+        <div class="viewer-main">
+          <div class="inspector dataset-summary">
+            <div class="metric dataset-metric">
               <span>Dataset</span>
               <strong id="datasetName">-</strong>
             </div>
@@ -47,6 +45,10 @@
               <strong id="segmentMetric">-</strong>
             </div>
           </div>
+          <div id="videoGrid" class="video-grid"></div>
+        </div>
+        <div id="viewerResizeHandle" class="pane-resize-handle vertical" title="Resize panels"></div>
+        <aside class="side-panel">
           <div class="progress-panel">
             <div class="panel-title">Annotation</div>
             <div class="annotation-progress">

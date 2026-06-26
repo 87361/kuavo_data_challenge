@@ -54,7 +54,9 @@ export function createEpisodeController(ctx) {
       els.urdfPath.value = storedString(STORAGE.urdfPath, "") || state.dataset.urdf_path || "";
     }
     const active = state.dataset.active_workspace_path ? ` -> ${state.dataset.active_workspace_path}` : "";
-    els.datasetName.textContent = `${state.dataset.path.split("/").slice(-3).join("/")}${active}`;
+    const datasetLabel = `${state.dataset.path.split("/").slice(-3).join("/")}${active}`;
+    els.datasetName.textContent = datasetLabel;
+    els.datasetName.title = datasetLabel;
     ctx.progress.applyProgress(state.progress);
     await loadEpisode(0);
     setStatus("Ready");

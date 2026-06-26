@@ -66,7 +66,8 @@ export function createLayoutController(ctx) {
   }
 
   function initResizeHandle() {
-    const savedBottom = storedNumber(STORAGE.bottomHeight, 340);
+    const savedBottomValue = localStorage.getItem(STORAGE.bottomHeight);
+    const savedBottom = savedBottomValue === null ? null : storedNumber(STORAGE.bottomHeight, null);
     if (savedBottom) els.appShell.style.setProperty("--bottom-height", `${savedBottom}px`);
     const savedSide = storedNumber(STORAGE.sideWidth, 320);
     if (savedSide) els.appShell.style.setProperty("--side-width", `${savedSide}px`);

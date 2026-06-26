@@ -133,6 +133,7 @@ function bindEvents() {
   });
 
   window.addEventListener("resize", () => {
+    ctx.video.updateCameraLayout();
     ctx.timeline.updateTimelineContentSize();
     ctx.timeline.ensureFrameInView(state.currentFrame);
     ctx.timeline.renderTimeline();
