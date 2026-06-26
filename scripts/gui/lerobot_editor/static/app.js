@@ -1,6 +1,7 @@
 import { api } from "./api.js";
 import { createCurveController } from "./curves.js";
 import { collectElements, createStatus } from "./dom.js";
+import { createDockController } from "./dock-integration.js";
 import { createEditController } from "./edits.js";
 import { createEpisodeController } from "./episodes.js";
 import { createExportController } from "./export.js";
@@ -12,6 +13,7 @@ import { state } from "./state.js";
 import { STORAGE, clamp } from "./utils.js";
 import { createVideoController } from "./video.js";
 import { createTimelineController } from "./timeline.js";
+import { createTerminalController } from "./terminal.js";
 
 const els = collectElements();
 const ctx = {
@@ -31,6 +33,8 @@ ctx.episodes = createEpisodeController(ctx);
 ctx.edits = createEditController(ctx);
 ctx.exporter = createExportController(ctx);
 ctx.layout = createLayoutController(ctx);
+ctx.terminal = createTerminalController(ctx);
+ctx.dock = createDockController(ctx);
 
 ctx.updateControlValues = () => ctx.layout.updateControlValues();
 ctx.renderAll = () => {
@@ -111,6 +115,15 @@ function bindEvents() {
     } else if (event.key.toLowerCase() === "s") {
       event.preventDefault();
       ctx.progress.completeCurrentAndSave().catch((err) => ctx.setStatus(err.message));
+    } else if (event.ctrlKey && event.key.toLowerCase() === "z") {
+      event.preventDefault();
+      ctx.edits.undo().catch((err) => ctx.setStatus(err.message));
+    } else if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === "c") {
+      event.preventDefault();
+      ctx.edits.cutAtFrame().catch((err) => ctx.setStatus(err.message));
+    } else if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === "d") {
+      event.preventDefault();
+      ctx.edits.toggleDeleteSegment().catch((err) => ctx.setStatus(err.message));
     } else if (event.key.toLowerCase() === "n") {
       event.preventDefault();
       ctx.episodes.moveEpisode(1).catch((err) => ctx.setStatus(err.message));
@@ -145,6 +158,7 @@ function init() {
   bindEvents();
   ctx.layout.initResizeHandle();
   ctx.layout.updateControlValues();
+  ctx.terminal.start();
   ctx.progress.renderProgress();
   ctx.episodes.renderEpisodeNav();
   ctx.episodes.loadDatasets().catch((err) => ctx.setStatus(err.message));

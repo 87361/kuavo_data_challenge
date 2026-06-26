@@ -65,20 +65,39 @@ export function createProgressController(ctx) {
   }
 
   function renderTrajectoryPreview() {
+    const job = state.trajectoryJob;
+    if (job?.params?.episode_index === state.episodeIndex && job.status === "running") {
+      els.trajectoryVideo.removeAttribute("src");
+      els.trajectoryVideo.load();
+      const pct = Math.round((Number(job.progress) || 0) * 100);
+      els.trajectoryProgressBar.style.width = `${pct}%`;
+      els.trajectoryStatus.textContent = `${pct}% ${job.message || "Generating preview"}`;
+      return;
+    }
+    if (job?.params?.episode_index === state.episodeIndex && job.status === "failed") {
+      els.trajectoryProgressBar.style.width = "100%";
+      els.trajectoryVideo.removeAttribute("src");
+      els.trajectoryVideo.load();
+      els.trajectoryStatus.textContent = job.error || job.message || "Trajectory preview failed";
+      return;
+    }
     if (!state.episode) {
       els.trajectoryVideo.removeAttribute("src");
       els.trajectoryVideo.load();
+      els.trajectoryProgressBar.style.width = "0%";
       els.trajectoryStatus.textContent = "No episode loaded";
       return;
     }
     const preview = state.trajectoryPreview;
     if (preview?.episodeIndex === state.episodeIndex && preview.url) {
       els.trajectoryVideo.src = preview.url;
+      els.trajectoryProgressBar.style.width = "100%";
       els.trajectoryStatus.textContent = preview.cached ? "Cached preview" : "Preview ready";
       return;
     }
     els.trajectoryVideo.removeAttribute("src");
     els.trajectoryVideo.load();
+    els.trajectoryProgressBar.style.width = "0%";
     els.trajectoryStatus.textContent = isCurrentEpisodeComplete()
       ? "Preview not generated yet"
       : "Mark an episode complete to generate a preview";
@@ -227,11 +246,18 @@ export function createProgressController(ctx) {
 
   async function generateTrajectoryPreview() {
     if (!state.episode) return;
-    els.trajectoryStatus.textContent = "Generating preview";
+    stopTrajectoryPolling();
+    state.trajectoryJob = {
+      status: "running",
+      message: "Queued",
+      progress: 0,
+      params: { episode_index: state.episodeIndex },
+    };
+    renderTrajectoryPreview();
     const videoKey = state.episode.video_keys.includes("observation.images.head_cam_h")
       ? "observation.images.head_cam_h"
       : state.episode.video_keys[0];
-    const payload = await api(`/api/trajectory/episode/${state.episodeIndex}`, {
+    const job = await api(`/api/trajectory/episode/${state.episodeIndex}`, {
       method: "POST",
       body: JSON.stringify({
         urdf_path: els.urdfPath.value.trim() || null,
@@ -240,19 +266,48 @@ export function createProgressController(ctx) {
         hand: "auto",
       }),
     });
-    if (payload.status === "missing_urdf") {
-      state.trajectoryPreview = null;
-      els.trajectoryVideo.removeAttribute("src");
-      els.trajectoryVideo.load();
-      els.trajectoryStatus.textContent = payload.message;
+    applyTrajectoryJob(job);
+    if (job.status === "running") {
+      state.trajectoryPoll = setInterval(() => {
+        pollTrajectoryStatus().catch((error) => {
+          stopTrajectoryPolling();
+          state.trajectoryJob = { status: "failed", error: error.message, params: { episode_index: state.episodeIndex } };
+          renderTrajectoryPreview();
+        });
+      }, 700);
+      await pollTrajectoryStatus();
+    }
+  }
+
+  function stopTrajectoryPolling() {
+    if (state.trajectoryPoll) {
+      clearInterval(state.trajectoryPoll);
+      state.trajectoryPoll = null;
+    }
+  }
+
+  function applyTrajectoryJob(job) {
+    state.trajectoryJob = job || null;
+    if (!job) {
+      renderTrajectoryPreview();
       return;
     }
-    state.trajectoryPreview = {
-      episodeIndex: state.episodeIndex,
-      url: payload.url,
-      cached: Boolean(payload.cached),
-    };
+    if (job.status === "complete" && job.url) {
+      state.trajectoryPreview = {
+        episodeIndex: Number(job.params?.episode_index ?? state.episodeIndex),
+        url: job.url,
+        cached: Boolean(job.cached),
+      };
+      stopTrajectoryPolling();
+    } else if (job.status === "failed") {
+      stopTrajectoryPolling();
+    }
     renderTrajectoryPreview();
+  }
+
+  async function pollTrajectoryStatus() {
+    const job = await api("/api/trajectory/status");
+    applyTrajectoryJob(job);
   }
 
   return {

@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>LeRobot Editor</title>
+    <link rel="stylesheet" href="/static/dock-layout.css" />
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
@@ -21,8 +22,20 @@
         <div id="statusText" class="status">Idle</div>
       </header>
 
-      <section id="viewer" class="viewer">
-        <div class="viewer-main">
+      <section class="dockbar">
+        <button type="button" data-dock-panel="viewport">Viewport</button>
+        <button type="button" data-dock-panel="timeline">Timeline</button>
+        <button type="button" data-dock-panel="curves">Curves</button>
+        <button type="button" data-dock-panel="annotation">Annotation</button>
+        <button type="button" data-dock-panel="trajectory">Trajectory</button>
+        <button type="button" data-dock-panel="terminal">Terminal</button>
+        <button id="resetDockLayout" type="button">Reset Layout</button>
+      </section>
+
+      <section id="dockRoot" class="editor-dock"></section>
+
+      <div id="panelSources" class="panel-sources">
+        <section id="viewportPanelSource" class="viewer-panel">
           <div class="inspector dataset-summary">
             <div class="metric dataset-metric">
               <span>Dataset</span>
@@ -46,119 +59,130 @@
             </div>
           </div>
           <div id="videoGrid" class="video-grid"></div>
-        </div>
-        <div id="viewerResizeHandle" class="pane-resize-handle vertical" title="Resize panels"></div>
-        <aside class="side-panel">
-          <div class="progress-panel">
-            <div class="panel-title">Annotation</div>
-            <div class="annotation-progress">
-              <div id="annotationProgressBar"></div>
+        </section>
+
+        <section id="timelinePanelSource" class="timeline-wrap">
+          <section class="transport">
+            <button id="prevFrame" title="Previous frame">|&lt;</button>
+            <button id="playPause" title="Play or pause">Play</button>
+            <select id="playbackRate" class="field playback-rate" title="Playback speed">
+              <option value="0.5">0.5x</option>
+              <option value="1">1x</option>
+              <option value="1.5">1.5x</option>
+              <option value="2">2x</option>
+              <option value="3">3x</option>
+              <option value="4">4x</option>
+            </select>
+            <button id="nextFrame" title="Next frame">&gt;|</button>
+            <button id="cutFrame" title="Cut at playhead">Cut</button>
+            <button id="deleteSegment" title="Delete selected segment">Delete</button>
+            <button id="undoEdit" title="Undo">Undo</button>
+            <button id="redoEdit" title="Redo">Redo</button>
+            <input id="urdfPath" class="field urdf-field" placeholder="URDF path" title="URDF path for adaptive smoothing" />
+            <input id="exportPath" class="field export-field" />
+            <button id="exportDataset" class="primary">Export</button>
+          </section>
+          <div class="timeline-toolbar">
+            <button id="zoomOut" title="Zoom out">-</button>
+            <input id="zoomSlider" class="zoom-slider" type="range" min="1" max="24" step="0.25" value="1" title="Timeline zoom" />
+            <button id="zoomIn" title="Zoom in">+</button>
+            <button id="zoomReset" title="Reset zoom">1x</button>
+          </div>
+          <div id="timelineScroll" class="timeline-scroll">
+            <div id="timeline" class="timeline"></div>
+          </div>
+        </section>
+
+        <section id="curvesPanelSource" class="curves-panel">
+          <div class="curve-toolbar">
+            <select id="curveGroup" class="field curve-group" title="Joint group">
+              <option value="left">Left 7</option>
+              <option value="right">Right 7</option>
+              <option value="arms">Arms 14</option>
+              <option value="all">All</option>
+            </select>
+            <input id="curveScale" class="curve-scale" type="range" min="0.5" max="4" step="0.1" value="1" title="Curve vertical zoom" />
+          </div>
+          <div id="curveScroll" class="curve-scroll">
+            <canvas id="curveCanvas" class="curve-canvas"></canvas>
+          </div>
+        </section>
+
+        <section id="annotationPanelSource" class="progress-panel">
+          <div class="panel-title">Annotation</div>
+          <div class="annotation-progress">
+            <div id="annotationProgressBar"></div>
+          </div>
+          <div class="progress-grid">
+            <div class="metric compact">
+              <span>Completed</span>
+              <strong id="completedMetric">0 / 0</strong>
             </div>
-            <div class="progress-grid">
-              <div class="metric compact">
-                <span>Completed</span>
-                <strong id="completedMetric">0 / 0</strong>
-              </div>
-              <div class="metric compact">
-                <span>Edited</span>
-                <strong id="editedMetric">0</strong>
-              </div>
-              <div class="metric compact">
-                <span>Pending Export</span>
-                <strong id="pendingExportMetric">0</strong>
-              </div>
-              <div class="metric compact">
-                <span>Saved</span>
-                <strong id="savedMetric">-</strong>
-              </div>
+            <div class="metric compact">
+              <span>Edited</span>
+              <strong id="editedMetric">0</strong>
             </div>
-            <div class="progress-actions">
-              <button id="markComplete" class="primary">Mark Complete</button>
-              <button id="saveProgress">Save Progress</button>
+            <div class="metric compact">
+              <span>Pending Export</span>
+              <strong id="pendingExportMetric">0</strong>
             </div>
-            <div id="progressStatus" class="progress-status">Not loaded</div>
-            <div class="annotation-editor">
-              <div class="annotation-heading">
-                <span>Score</span>
-                <strong id="ratingValue">-</strong>
-              </div>
-              <div id="ratingButtons" class="rating-buttons">
-                <button data-rating="1" title="Keyboard 1">1</button>
-                <button data-rating="2" title="Keyboard 2">2</button>
-                <button data-rating="3" title="Keyboard 3">3</button>
-                <button data-rating="4" title="Keyboard 4">4</button>
-                <button data-rating="5" title="Keyboard 5">5</button>
-                <button data-rating="6" title="Keyboard 6">6</button>
-                <button data-rating="7" title="Keyboard 7">7</button>
-                <button data-rating="8" title="Keyboard 8">8</button>
-                <button data-rating="9" title="Keyboard 9">9</button>
-                <button data-rating="10" title="Keyboard 0">10</button>
-              </div>
-              <textarea id="noteInput" class="field note-input" rows="3" placeholder="Add note"></textarea>
-              <button id="addNote">Submit Note</button>
-              <div class="annotation-heading">
-                <span>Current Notes</span>
-              </div>
-              <div id="currentNotes" class="chip-list"></div>
-              <div class="annotation-heading">
-                <span>Saved Tags</span>
-              </div>
-              <div id="noteLabels" class="chip-list"></div>
+            <div class="metric compact">
+              <span>Saved</span>
+              <strong id="savedMetric">-</strong>
             </div>
           </div>
-          <div class="trajectory-panel">
-            <div class="panel-title">Trajectory Preview</div>
-            <video id="trajectoryVideo" controls muted playsinline></video>
-            <div id="trajectoryStatus" class="trajectory-status">Mark an episode complete to generate a preview</div>
+          <div class="progress-actions">
+            <button id="markComplete" class="primary">Mark Complete</button>
+            <button id="saveProgress">Save Progress</button>
           </div>
-        </aside>
-      </section>
+          <div id="progressStatus" class="progress-status">Not loaded</div>
+          <div class="annotation-editor">
+            <div class="annotation-heading">
+              <span>Score</span>
+              <strong id="ratingValue">-</strong>
+            </div>
+            <div id="ratingButtons" class="rating-buttons">
+              <button data-rating="1" title="Keyboard 1">1</button>
+              <button data-rating="2" title="Keyboard 2">2</button>
+              <button data-rating="3" title="Keyboard 3">3</button>
+              <button data-rating="4" title="Keyboard 4">4</button>
+              <button data-rating="5" title="Keyboard 5">5</button>
+              <button data-rating="6" title="Keyboard 6">6</button>
+              <button data-rating="7" title="Keyboard 7">7</button>
+              <button data-rating="8" title="Keyboard 8">8</button>
+              <button data-rating="9" title="Keyboard 9">9</button>
+              <button data-rating="10" title="Keyboard 0">10</button>
+            </div>
+            <textarea id="noteInput" class="field note-input" rows="3" placeholder="Add note"></textarea>
+            <button id="addNote">Submit Note</button>
+            <div class="annotation-heading">
+              <span>Current Notes</span>
+            </div>
+            <div id="currentNotes" class="chip-list"></div>
+            <div class="annotation-heading">
+              <span>Saved Tags</span>
+            </div>
+            <div id="noteLabels" class="chip-list"></div>
+          </div>
+        </section>
 
-      <section class="transport">
-        <button id="prevFrame" title="Previous frame">|&lt;</button>
-        <button id="playPause" title="Play or pause">Play</button>
-        <select id="playbackRate" class="field playback-rate" title="Playback speed">
-          <option value="0.5">0.5x</option>
-          <option value="1">1x</option>
-          <option value="1.5">1.5x</option>
-          <option value="2">2x</option>
-          <option value="3">3x</option>
-          <option value="4">4x</option>
-        </select>
-        <button id="nextFrame" title="Next frame">&gt;|</button>
-        <button id="cutFrame" title="Cut at playhead">Cut</button>
-        <button id="deleteSegment" title="Delete selected segment">Delete</button>
-        <button id="undoEdit" title="Undo">Undo</button>
-        <button id="redoEdit" title="Redo">Redo</button>
-        <input id="urdfPath" class="field urdf-field" placeholder="URDF path" title="URDF path for adaptive smoothing" />
-        <input id="exportPath" class="field export-field" />
-        <button id="exportDataset" class="primary">Export</button>
-      </section>
+        <section id="trajectoryPanelSource" class="trajectory-panel">
+          <div class="panel-title">Trajectory Preview</div>
+          <video id="trajectoryVideo" controls muted playsinline></video>
+          <div class="trajectory-progress" aria-label="Trajectory render progress">
+            <div id="trajectoryProgressBar"></div>
+          </div>
+          <div id="trajectoryStatus" class="trajectory-status">Mark an episode complete to generate a preview</div>
+        </section>
 
-      <div id="mainResizeHandle" class="main-resize-handle" title="Resize video and curves"></div>
-
-      <section class="timeline-wrap">
-        <div class="timeline-toolbar">
-          <button id="zoomOut" title="Zoom out">-</button>
-          <input id="zoomSlider" class="zoom-slider" type="range" min="1" max="24" step="0.25" value="1" title="Timeline zoom" />
-          <button id="zoomIn" title="Zoom in">+</button>
-          <button id="zoomReset" title="Reset zoom">1x</button>
-          <select id="curveGroup" class="field curve-group" title="Joint group">
-            <option value="left">Left 7</option>
-            <option value="right">Right 7</option>
-            <option value="arms">Arms 14</option>
-            <option value="all">All</option>
-          </select>
-          <input id="curveScale" class="curve-scale" type="range" min="0.5" max="4" step="0.1" value="1" title="Curve vertical zoom" />
-        </div>
-        <div id="timelineScroll" class="timeline-scroll">
-          <div id="timeline" class="timeline"></div>
-        </div>
-        <div id="curveResizeHandle" class="curve-resize-handle" title="Resize timeline and curves"></div>
-        <div id="curveScroll" class="curve-scroll">
-          <canvas id="curveCanvas" class="curve-canvas"></canvas>
-        </div>
-      </section>
+        <section id="terminalPanelSource" class="terminal-panel">
+          <div class="terminal-toolbar">
+            <span>Application Logs</span>
+            <button id="clearTerminal" type="button">Clear</button>
+          </div>
+          <pre id="terminalLog" class="terminal-log" tabindex="0"></pre>
+        </section>
+      </div>
     </main>
     <script type="module" src="/static/app.js"></script>
   </body>

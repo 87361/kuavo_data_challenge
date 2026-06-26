@@ -6,6 +6,7 @@ import json
 import mimetypes
 import os
 import threading
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -84,6 +85,32 @@ class CoverageAnalysisRequest(BaseModel):
     cluster_count: int | str = "auto"
 
 
+class AppLogBuffer:
+    def __init__(self, limit: int = 500) -> None:
+        self._lock = threading.Lock()
+        self._seq = 0
+        self._items: deque[dict[str, Any]] = deque(maxlen=limit)
+
+    def append(self, level: str, source: str, message: str, **fields: Any) -> dict[str, Any]:
+        with self._lock:
+            self._seq += 1
+            item = {
+                "seq": self._seq,
+                "time": _utc_now(),
+                "level": level,
+                "source": source,
+                "message": str(message),
+                **fields,
+            }
+            self._items.append(item)
+            return dict(item)
+
+    def read_after(self, after: int = 0) -> dict[str, Any]:
+        with self._lock:
+            logs = [dict(item) for item in self._items if int(item["seq"]) > after]
+            return {"logs": logs, "next_seq": self._seq}
+
+
 class AnalysisJob:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -114,6 +141,39 @@ class AnalysisJob:
             }
 
 
+class TrajectoryJob:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.status = "idle"
+        self.message = ""
+        self.progress = 0.0
+        self.error: str | None = None
+        self.result: dict[str, Any] | None = None
+        self.params: dict[str, Any] | None = None
+
+    def reset(self) -> None:
+        self.update(status="idle", message="", progress=0.0, error=None, result=None, params=None)
+
+    def update(self, **kwargs: Any) -> None:
+        with self._lock:
+            for key, value in kwargs.items():
+                setattr(self, key, value)
+
+    def as_dict(self) -> dict[str, Any]:
+        with self._lock:
+            payload = {
+                "status": self.status,
+                "message": self.message,
+                "progress": self.progress,
+                "error": self.error,
+                "params": self.params,
+                "result": self.result,
+            }
+            if self.result:
+                payload.update(self.result)
+            return payload
+
+
 class AppState:
     def __init__(self) -> None:
         self.data_root = Path("/mnt/data/kuavo_tianchi")
@@ -132,6 +192,8 @@ class AppState:
         self.last_export_path: str | None = None
         self.export_job = ExportJob()
         self.analysis_job = AnalysisJob()
+        self.trajectory_job = TrajectoryJob()
+        self.app_logs = AppLogBuffer()
 
     def require_dataset(self) -> LeRobotV21Dataset:
         if self.dataset is None:
@@ -154,6 +216,10 @@ def _progress_path_for_root(root: Path) -> Path:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _log(level: str, source: str, message: str, **fields: Any) -> None:
+    state.app_logs.append(level, source, message, **fields)
 
 
 def _read_json_file(path: Path) -> dict[str, Any]:
@@ -562,6 +628,11 @@ def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
 
 
+@app.get("/api/logs")
+def api_logs(after: int = Query(0, ge=0)) -> dict[str, Any]:
+    return state.app_logs.read_after(after)
+
+
 @app.get("/api/datasets")
 def api_datasets() -> dict[str, Any]:
     datasets: list[dict[str, Any]] = []
@@ -595,6 +666,8 @@ def api_open(req: OpenRequest) -> dict[str, Any]:
     state.dataset = dataset
     _load_progress(dataset)
     state.analysis_job.reset()
+    state.trajectory_job.reset()
+    _log("info", "dataset", f"Opened dataset {canonical}")
     return {
         "path": str(canonical),
         "active_dataset": str(dataset.root),
@@ -788,6 +861,7 @@ def _run_export(req: ExportRequest) -> None:
             error=None,
             manifest=None,
         )
+        _log("info", "export", f"Starting export to {req.output_path}")
 
         def progress(payload: dict[str, Any]) -> None:
             state.export_job.update(**payload)
@@ -815,8 +889,10 @@ def _run_export(req: ExportRequest) -> None:
         state.last_export_path = str(state.active_workspace_path)
         _save_progress(dataset)
         state.export_job.update(status="complete", message="export complete", progress=1.0, manifest=manifest)
+        _log("info", "export", "Export complete", output_path=req.output_path)
     except Exception as exc:
         state.export_job.update(status="failed", message="export failed", error=str(exc))
+        _log("error", "export", f"Export failed: {exc}")
 
 
 @app.post("/api/export")
@@ -864,6 +940,49 @@ def _trajectory_cache_name(
 
 @app.post("/api/trajectory/episode/{episode_index}")
 def api_trajectory_preview(episode_index: int, req: TrajectoryPreviewRequest) -> dict[str, Any]:
+    context = _prepare_trajectory_preview(episode_index, req)
+    if context is None:
+        return state.trajectory_job.as_dict()
+
+    output_path = context["output_path"]
+    params = context["params"]
+    if output_path.exists():
+        result = _trajectory_result(output_path, cached=True)
+        state.trajectory_job.update(
+            status="complete",
+            message="cached preview ready",
+            progress=1.0,
+            error=None,
+            result=result,
+            params=params,
+        )
+        _log("info", "trajectory", f"Using cached trajectory preview for episode {episode_index}")
+        return state.trajectory_job.as_dict()
+
+    current = state.trajectory_job.as_dict()
+    if current["status"] == "running":
+        return current
+
+    state.trajectory_job.update(
+        status="running",
+        message="queued trajectory preview",
+        progress=0.0,
+        error=None,
+        result=None,
+        params=params,
+    )
+    _log("info", "trajectory", f"Queued trajectory preview for episode {episode_index}")
+    thread = threading.Thread(target=_run_trajectory_preview, args=(context,), daemon=True)
+    thread.start()
+    return state.trajectory_job.as_dict()
+
+
+@app.get("/api/trajectory/status")
+def api_trajectory_status() -> dict[str, Any]:
+    return state.trajectory_job.as_dict()
+
+
+def _prepare_trajectory_preview(episode_index: int, req: TrajectoryPreviewRequest) -> dict[str, Any] | None:
     dataset = state.require_dataset()
     if episode_index < 0 or episode_index >= len(dataset.episodes):
         raise HTTPException(status_code=404, detail="episode not found")
@@ -875,7 +994,17 @@ def api_trajectory_preview(episode_index: int, req: TrajectoryPreviewRequest) ->
     requested_urdf = req.urdf_path.strip() if req.urdf_path else ""
     urdf_path = Path(requested_urdf).expanduser().resolve() if requested_urdf else state.urdf_path
     if urdf_path is None or not urdf_path.exists():
-        return {"status": "missing_urdf", "message": "Set a valid URDF path to generate the trajectory preview"}
+        message = "Set a valid URDF path to generate the trajectory preview"
+        state.trajectory_job.update(
+            status="failed",
+            message=message,
+            progress=1.0,
+            error=message,
+            result=None,
+            params={"episode_index": episode_index, "source": req.source, "hand": req.hand},
+        )
+        _log("warning", "trajectory", message)
+        return None
     state.urdf_path = urdf_path
 
     video_key = req.video_key or (
@@ -889,45 +1018,91 @@ def api_trajectory_preview(episode_index: int, req: TrajectoryPreviewRequest) ->
     cache_dir = _trajectory_cache_dir()
     cache_dir.mkdir(parents=True, exist_ok=True)
     output_path = cache_dir / _trajectory_cache_name(dataset, episode_index, urdf_path, video_key, req.source, req.hand)
-    cached = output_path.exists()
-    if not cached:
-        try:
-            try:
-                from .trajectory_video import render_video
-                from .trajectory_visualizer import load_episode_positions
-                from .urdf_fk import SimpleArmFk
-            except ImportError:  # pragma: no cover - direct script execution fallback
-                from trajectory_video import render_video
-                from trajectory_visualizer import load_episode_positions
-                from urdf_fk import SimpleArmFk
-
-            fk = SimpleArmFk(urdf_path)
-            left, right = load_episode_positions(dataset, episode_index, fk, req.source)
-            args = argparse.Namespace(
-                episode=episode_index,
-                video_key=video_key,
-                source=req.source,
-                hand=req.hand,
-                output=str(output_path),
-                title=None,
-                width=1280,
-                height=720,
-                dpi=120,
-                stride=1,
-                fps=None,
-                max_frames=None,
-                camera_left=False,
-                codec="mp4v",
-            )
-            render_video(dataset, args, left, right)
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+    params = {
+        "episode_index": episode_index,
+        "urdf_path": str(urdf_path),
+        "video_key": video_key,
+        "source": req.source,
+        "hand": req.hand,
+        "output_path": str(output_path),
+    }
     return {
-        "status": "ready",
+        "dataset": dataset,
+        "episode_index": episode_index,
+        "urdf_path": urdf_path,
+        "video_key": video_key,
+        "source": req.source,
+        "hand": req.hand,
+        "output_path": output_path,
+        "params": params,
+    }
+
+
+def _trajectory_result(output_path: Path, cached: bool) -> dict[str, Any]:
+    return {
         "url": f"/api/trajectory/preview/{output_path.name}",
-        "cached": cached,
+        "cached": bool(cached),
         "path": str(output_path),
     }
+
+
+def _run_trajectory_preview(context: dict[str, Any]) -> None:
+    try:
+        try:
+            from .trajectory_video import render_video
+            from .trajectory_visualizer import load_episode_positions
+            from .urdf_fk import SimpleArmFk
+        except ImportError:  # pragma: no cover - direct script execution fallback
+            from trajectory_video import render_video
+            from trajectory_visualizer import load_episode_positions
+            from urdf_fk import SimpleArmFk
+
+        dataset = context["dataset"]
+        episode_index = int(context["episode_index"])
+        urdf_path = context["urdf_path"]
+        video_key = str(context["video_key"])
+        output_path = context["output_path"]
+        source = str(context["source"])
+        hand = str(context["hand"])
+
+        state.trajectory_job.update(status="running", message="loading trajectory", progress=0.05)
+        _log("info", "trajectory", f"Rendering trajectory preview for episode {episode_index}")
+        fk = SimpleArmFk(urdf_path)
+        left, right = load_episode_positions(dataset, episode_index, fk, source)
+        state.trajectory_job.update(status="running", message="rendering frames", progress=0.2)
+
+        def progress(payload: dict[str, Any]) -> None:
+            state.trajectory_job.update(**payload)
+
+        args = argparse.Namespace(
+            episode=episode_index,
+            video_key=video_key,
+            source=source,
+            hand=hand,
+            output=str(output_path),
+            title=None,
+            width=1280,
+            height=720,
+            dpi=120,
+            stride=1,
+            fps=None,
+            max_frames=None,
+            camera_left=False,
+            codec="mp4v",
+        )
+        render_video(dataset, args, left, right, progress=progress)
+        result = _trajectory_result(output_path, cached=False)
+        state.trajectory_job.update(
+            status="complete",
+            message="trajectory preview ready",
+            progress=1.0,
+            error=None,
+            result=result,
+        )
+        _log("info", "trajectory", f"Trajectory preview ready for episode {episode_index}")
+    except Exception as exc:
+        state.trajectory_job.update(status="failed", message="trajectory preview failed", progress=1.0, error=str(exc))
+        _log("error", "trajectory", f"Trajectory preview failed: {exc}")
 
 
 @app.get("/api/trajectory/preview/{filename}")

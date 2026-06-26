@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import scripts.gui.lerobot_editor.server as editor_server
 from scripts.gui.lerobot_editor.analysis import compute_coverage_analysis
 from scripts.gui.lerobot_editor.dataset import find_lerobot_datasets, load_v21_dataset
 from scripts.gui.lerobot_editor.edits import build_segments, kept_ranges, transition_frame_count
@@ -596,3 +597,81 @@ def test_coverage_analysis_endpoint(tmp_path: Path) -> None:
         time.sleep(0.05)
     assert status["status"] == "complete"
     assert status["result"]["cluster_count"] == 2
+
+
+def test_app_logs_endpoint_returns_entries_after_cursor() -> None:
+    client = TestClient(app)
+    cursor = state.app_logs.read_after(0)["next_seq"]
+
+    state.app_logs.append("info", "test", "hello log")
+
+    payload = client.get("/api/logs", params={"after": cursor}).json()
+    assert payload["logs"][-1]["message"] == "hello log"
+    assert payload["logs"][-1]["source"] == "test"
+    assert payload["next_seq"] >= payload["logs"][-1]["seq"]
+
+
+def test_trajectory_preview_missing_urdf_reports_failed_job(tmp_path: Path) -> None:
+    source = make_v21_dataset(tmp_path / "dataset" / "task" / "lerobot")
+    state.dataset = load_v21_dataset(source)
+    state.canonical_source_path = source
+    state.active_workspace_path = None
+    state.urdf_path = None
+    state.trajectory_job.reset()
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/trajectory/episode/0",
+        json={"urdf_path": str(tmp_path / "missing.urdf"), "video_key": "observation.images.head_cam_h"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "failed"
+    assert "valid URDF" in payload["error"]
+    status = client.get("/api/trajectory/status").json()
+    assert status["status"] == "failed"
+    assert "valid URDF" in status["message"]
+
+
+def test_trajectory_preview_endpoint_runs_background_job(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = make_v21_dataset(tmp_path / "dataset" / "task" / "lerobot")
+    urdf = make_test_urdf(tmp_path / "test.urdf")
+    state.dataset = load_v21_dataset(source)
+    state.canonical_source_path = source
+    state.active_workspace_path = None
+    state.urdf_path = urdf
+    state.trajectory_job.reset()
+
+    def fake_run(context: dict) -> None:
+        output_path = Path(context["output_path"])
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        state.trajectory_job.update(status="running", message="fake render", progress=0.5)
+        time.sleep(0.01)
+        output_path.write_bytes(b"fake mp4")
+        state.trajectory_job.update(
+            status="complete",
+            message="trajectory preview ready",
+            progress=1.0,
+            error=None,
+            result=editor_server._trajectory_result(output_path, cached=False),
+        )
+
+    monkeypatch.setattr(editor_server, "_run_trajectory_preview", fake_run)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/trajectory/episode/0",
+        json={"urdf_path": str(urdf), "video_key": "observation.images.head_cam_h"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "running"
+    for _ in range(40):
+        status = client.get("/api/trajectory/status").json()
+        if status["status"] == "complete":
+            break
+        time.sleep(0.05)
+    assert status["status"] == "complete"
+    assert status["url"].startswith("/api/trajectory/preview/")
+    assert status["cached"] is False

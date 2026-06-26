@@ -4,12 +4,12 @@ export function createLayoutController(ctx) {
   const { state, els } = ctx;
 
   function updateControlValues() {
-    els.zoomSlider.value = String(state.zoom);
-    els.curveScale.value = String(state.curveScale);
+    if (els.zoomSlider) els.zoomSlider.value = String(state.zoom);
+    if (els.curveScale) els.curveScale.value = String(state.curveScale);
     if (els.playbackRate) els.playbackRate.value = String(state.playbackRate);
-    if ([...els.curveGroup.options].some((option) => option.value === state.curveGroup)) {
+    if (els.curveGroup && [...els.curveGroup.options].some((option) => option.value === state.curveGroup)) {
       els.curveGroup.value = state.curveGroup;
-    } else {
+    } else if (els.curveGroup) {
       els.curveGroup.value = "left";
       state.curveGroup = "left";
     }
@@ -45,6 +45,7 @@ export function createLayoutController(ctx) {
   }
 
   function applySideWidth(width) {
+    if (!els.viewer) return;
     const viewerWidth = els.viewer.getBoundingClientRect().width;
     const maxWidth = Math.max(260, viewerWidth - 460);
     const next = clamp(Math.round(width), 260, Math.min(620, maxWidth));
@@ -56,7 +57,8 @@ export function createLayoutController(ctx) {
   }
 
   function applyTimelineHeight(height) {
-    const wrapRect = document.querySelector(".timeline-wrap").getBoundingClientRect();
+    const wrapRect = document.querySelector(".timeline-wrap")?.getBoundingClientRect();
+    if (!wrapRect) return;
     const maxHeight = Math.max(54, wrapRect.height - 180);
     const next = clamp(Math.round(height), 54, maxHeight);
     els.appShell.style.setProperty("--timeline-height", `${next}px`);
@@ -74,7 +76,9 @@ export function createLayoutController(ctx) {
     const savedTimeline = storedNumber(STORAGE.timelineHeight, 76);
     if (savedTimeline) els.appShell.style.setProperty("--timeline-height", `${savedTimeline}px`);
 
-    els.mainResizeHandle.addEventListener("pointerdown", (event) => {
+    if (!els.mainResizeHandle && !els.viewerResizeHandle && !els.curveResizeHandle) return;
+
+    els.mainResizeHandle?.addEventListener("pointerdown", (event) => {
       const bottomRect = document.querySelector(".timeline-wrap").getBoundingClientRect();
       state.resizeDrag = {
         type: "bottom",
@@ -87,7 +91,7 @@ export function createLayoutController(ctx) {
       event.preventDefault();
     });
 
-    els.mainResizeHandle.addEventListener("pointermove", (event) => {
+    els.mainResizeHandle?.addEventListener("pointermove", (event) => {
       if (state.resizeDrag?.type !== "bottom") return;
       const delta = state.resizeDrag.startY - event.clientY;
       applyBottomHeight(state.resizeDrag.startHeight + delta);
@@ -103,10 +107,10 @@ export function createLayoutController(ctx) {
       event.preventDefault();
     }
 
-    els.mainResizeHandle.addEventListener("pointerup", finishDrag);
-    els.mainResizeHandle.addEventListener("pointercancel", finishDrag);
+    els.mainResizeHandle?.addEventListener("pointerup", finishDrag);
+    els.mainResizeHandle?.addEventListener("pointercancel", finishDrag);
 
-    els.viewerResizeHandle.addEventListener("pointerdown", (event) => {
+    els.viewerResizeHandle?.addEventListener("pointerdown", (event) => {
       const sideRect = document.querySelector(".side-panel").getBoundingClientRect();
       state.resizeDrag = {
         type: "side",
@@ -119,7 +123,7 @@ export function createLayoutController(ctx) {
       event.preventDefault();
     });
 
-    els.viewerResizeHandle.addEventListener("pointermove", (event) => {
+    els.viewerResizeHandle?.addEventListener("pointermove", (event) => {
       if (state.resizeDrag?.type !== "side") return;
       const delta = state.resizeDrag.startX - event.clientX;
       applySideWidth(state.resizeDrag.startWidth + delta);
@@ -135,10 +139,10 @@ export function createLayoutController(ctx) {
       event.preventDefault();
     }
 
-    els.viewerResizeHandle.addEventListener("pointerup", finishSideDrag);
-    els.viewerResizeHandle.addEventListener("pointercancel", finishSideDrag);
+    els.viewerResizeHandle?.addEventListener("pointerup", finishSideDrag);
+    els.viewerResizeHandle?.addEventListener("pointercancel", finishSideDrag);
 
-    els.curveResizeHandle.addEventListener("pointerdown", (event) => {
+    els.curveResizeHandle?.addEventListener("pointerdown", (event) => {
       const timelineRect = els.timelineScroll.getBoundingClientRect();
       state.resizeDrag = {
         type: "timeline",
@@ -151,7 +155,7 @@ export function createLayoutController(ctx) {
       event.preventDefault();
     });
 
-    els.curveResizeHandle.addEventListener("pointermove", (event) => {
+    els.curveResizeHandle?.addEventListener("pointermove", (event) => {
       if (state.resizeDrag?.type !== "timeline") return;
       const delta = event.clientY - state.resizeDrag.startY;
       applyTimelineHeight(state.resizeDrag.startHeight + delta);
@@ -167,8 +171,8 @@ export function createLayoutController(ctx) {
       event.preventDefault();
     }
 
-    els.curveResizeHandle.addEventListener("pointerup", finishTimelineDrag);
-    els.curveResizeHandle.addEventListener("pointercancel", finishTimelineDrag);
+    els.curveResizeHandle?.addEventListener("pointerup", finishTimelineDrag);
+    els.curveResizeHandle?.addEventListener("pointercancel", finishTimelineDrag);
   }
 
   return { initResizeHandle, setZoom, updateControlValues };

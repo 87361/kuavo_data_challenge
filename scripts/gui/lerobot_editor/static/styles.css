@@ -73,10 +73,9 @@ button:disabled {
 
 .app-shell {
   display: grid;
-  grid-template-rows: 52px auto 48px 8px minmax(220px, var(--bottom-height, 1fr));
-  align-content: start;
+  grid-template-rows: 52px 42px minmax(0, 1fr);
   height: 100vh;
-  min-height: 720px;
+  min-height: 620px;
   --side-width: 320px;
   --timeline-height: 76px;
 }
@@ -103,6 +102,50 @@ button:disabled {
   color: var(--muted);
   font-size: 13px;
   text-align: right;
+}
+
+.dockbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 5px 14px;
+  border-bottom: 1px solid var(--line);
+  background: #15181b;
+  overflow-x: auto;
+}
+
+.dockbar button {
+  flex: 0 0 auto;
+  height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.editor-dock {
+  min-width: 0;
+  min-height: 0;
+  padding: 8px;
+}
+
+.panel-sources {
+  display: none;
+}
+
+.dock-panel-content > section {
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.viewer-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+  padding: 10px;
+  overflow: auto;
 }
 
 .episode-nav {
@@ -151,18 +194,17 @@ button:disabled {
 
 .video-grid {
   display: flex;
-  align-items: flex-start;
+  align-items: stretch;
   gap: 0;
   min-height: 0;
   min-width: 0;
-  overflow-x: hidden;
-  overflow-y: visible;
+  overflow: auto;
 }
 
 .camera {
   display: grid;
   grid-template-rows: 28px auto;
-  align-self: flex-start;
+  align-self: stretch;
   flex: 1 1 0;
   min-height: 0;
   min-width: 180px;
@@ -532,15 +574,72 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.trajectory-progress {
+  height: 8px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #111417;
+}
+
+.trajectory-progress div {
+  width: 0%;
+  height: 100%;
+  background: linear-gradient(90deg, var(--amber), var(--green));
+  transition: width 160ms ease;
+}
+
+.terminal-panel {
+  display: grid;
+  grid-template-rows: 32px minmax(0, 1fr);
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+  padding: 10px;
+  overflow: hidden;
+}
+
+.terminal-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.terminal-toolbar button {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.terminal-log {
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: #dbe7ef;
+  background: #080a0c;
+  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
 .transport {
   display: grid;
-  grid-template-columns: 48px 72px 76px 48px 68px 82px 70px 70px minmax(180px, 0.7fr) minmax(260px, 1fr) 78px;
+  grid-template-columns: 48px 72px 76px 48px 68px 82px 70px 70px minmax(160px, 0.8fr) minmax(220px, 1fr) 78px;
   gap: 8px;
   align-items: center;
-  padding: 7px 14px;
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
-  background: #111315;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
 .export-field {
@@ -579,15 +678,17 @@ button:disabled {
 
 .timeline-wrap {
   display: grid;
-  grid-template-rows: 34px minmax(54px, var(--timeline-height)) 8px minmax(0, 1fr);
-  padding: 12px 14px 14px;
+  grid-template-rows: auto 34px minmax(112px, 1fr);
+  padding: 10px;
   gap: 10px;
+  height: 100%;
   min-height: 0;
+  overflow: hidden;
 }
 
 .timeline-toolbar {
   display: grid;
-  grid-template-columns: 34px minmax(120px, 240px) 34px 46px minmax(96px, 130px) minmax(120px, 220px);
+  grid-template-columns: 34px minmax(120px, 260px) 34px 46px minmax(0, 1fr);
   gap: 8px;
   align-items: center;
 }
@@ -613,6 +714,7 @@ button:disabled {
   overflow-x: auto;
   overflow-y: hidden;
   min-width: 0;
+  min-height: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #101316;
@@ -622,22 +724,58 @@ button:disabled {
   position: relative;
   width: 100%;
   height: 100%;
-  min-height: 54px;
+  min-height: 112px;
   overflow: hidden;
   background: #101316;
 }
 
-.segment {
+.timeline-thumb {
+  position: absolute;
+  top: 0;
+  bottom: 34px;
+  min-width: 18px;
+  overflow: hidden;
+  border-right: 1px solid rgba(255, 255, 255, 0.12);
+  background-color: #07090b;
+  background-position: left center;
+  background-repeat: repeat-x;
+  background-size: auto 100%;
+  opacity: 0.86;
+}
+
+.timeline-deleted-overlay {
   position: absolute;
   top: 0;
   bottom: 0;
-  height: 100%;
+  background:
+    linear-gradient(135deg, rgba(0, 0, 0, 0.24) 25%, transparent 25%) 0 0 / 12px 12px,
+    rgba(239, 107, 115, 0.48);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.cut-boundary {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: rgba(255, 255, 255, 0.52);
+  pointer-events: none;
+  z-index: 3;
+}
+
+.segment {
+  position: absolute;
+  top: calc(100% - 34px);
+  bottom: 0;
+  height: 34px;
   min-width: 5px;
   border-right: 1px solid rgba(255, 255, 255, 0.16);
   background:
     linear-gradient(to bottom, rgba(255, 255, 255, 0.08), transparent 35%),
     #2d5d69;
   cursor: pointer;
+  z-index: 4;
 }
 
 .timeline-tick {
@@ -647,6 +785,7 @@ button:disabled {
   width: 1px;
   background: rgba(255, 255, 255, 0.12);
   pointer-events: none;
+  z-index: 3;
 }
 
 .timeline-tick span {
@@ -686,23 +825,24 @@ button:disabled {
   background: var(--amber);
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
   pointer-events: none;
-  z-index: 4;
+  z-index: 6;
 }
 
-.curve-resize-handle {
-  cursor: row-resize;
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
-  border-bottom: 1px solid rgba(0, 0, 0, 0.35);
-  background:
-    linear-gradient(to bottom, transparent, rgba(255, 255, 255, 0.05), transparent),
-    #171a1e;
+.curves-panel {
+  display: grid;
+  grid-template-rows: 34px minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+  padding: 10px;
 }
 
-.curve-resize-handle:hover,
-.curve-resize-handle.dragging {
-  background:
-    linear-gradient(to bottom, transparent, rgba(87, 166, 255, 0.22), transparent),
-    #171a1e;
+.curve-toolbar {
+  display: grid;
+  grid-template-columns: minmax(110px, 150px) minmax(140px, 260px) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
 .curve-scroll {
@@ -724,13 +864,16 @@ button:disabled {
 
 @media (max-width: 980px) {
   .app-shell {
-    grid-template-rows: auto auto auto 8px minmax(260px, var(--bottom-height, 1fr));
+    grid-template-rows: auto auto minmax(0, 1fr);
   }
 
   .topbar,
-  .transport,
-  .viewer {
+  .transport {
     grid-template-columns: 1fr;
+  }
+
+  .topbar {
+    align-items: stretch;
   }
 
   .video-grid {
@@ -767,8 +910,7 @@ button:disabled {
     grid-template-columns: 34px minmax(100px, 1fr) 34px 46px;
   }
 
-  .curve-group,
-  .curve-scale {
-    display: none;
+  .curve-toolbar {
+    grid-template-columns: 1fr;
   }
 }

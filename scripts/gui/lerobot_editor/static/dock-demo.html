@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Dock Layout Prototype</title>
+    <link rel="stylesheet" href="./dock-layout.css" />
+    <link rel="stylesheet" href="./dock-demo.css" />
+  </head>
+  <body>
+    <main class="demo-shell">
+      <header class="demo-toolbar">
+        <div class="demo-brand">Dock Layout Prototype</div>
+        <div class="demo-actions" aria-label="Panel tools">
+          <button type="button" data-add-panel="viewport">+ Viewport</button>
+          <button type="button" data-add-panel="inspector">+ Inspector</button>
+          <button type="button" data-add-panel="timeline">+ Timeline</button>
+          <button type="button" data-add-panel="curves">+ Curves</button>
+          <button type="button" data-add-panel="console">+ Console</button>
+        </div>
+        <button id="resetLayout" type="button">Reset</button>
+      </header>
+
+      <section class="demo-stage">
+        <div id="dockRoot"></div>
+      </section>
+
+      <footer class="demo-status">
+        <span id="panelCount">Panels: 0</span>
+        <span id="layoutStatus">Saved locally</span>
+      </footer>
+    </main>
+
+    <script type="module" src="./dock-demo.js"></script>
+  </body>
+</html>

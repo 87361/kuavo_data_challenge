@@ -4,7 +4,7 @@ export function createTimelineController(ctx) {
   const { state, els } = ctx;
 
   function timelineViewportWidth() {
-    return Math.max(320, Math.floor(els.curveScroll?.clientWidth || els.timelineScroll?.clientWidth || 320));
+    return Math.max(320, Math.floor(Math.max(els.timelineScroll?.clientWidth || 0, els.curveScroll?.clientWidth || 0)));
   }
 
   function updateTimelineContentSize() {
@@ -13,7 +13,7 @@ export function createTimelineController(ctx) {
     const nextWidth = Math.max(viewport, Math.round(viewport * state.zoom));
     state.timelineContentWidth = nextWidth;
     els.timeline.style.width = `${nextWidth}px`;
-    els.curveCanvas.style.width = `${nextWidth}px`;
+    if (els.curveCanvas) els.curveCanvas.style.width = `${nextWidth}px`;
   }
 
   function pixelsPerFrame() {
@@ -24,7 +24,7 @@ export function createTimelineController(ctx) {
   function visibleRange() {
     if (!state.episode) return { start: 0, end: 1, span: 1 };
     updateTimelineContentSize();
-    const scrollLeft = els.curveScroll?.scrollLeft || els.timelineScroll?.scrollLeft || 0;
+    const scrollLeft = els.timelineScroll?.scrollLeft || els.curveScroll?.scrollLeft || 0;
     const width = timelineViewportWidth();
     const ppf = pixelsPerFrame();
     const start = clamp(Math.floor(scrollLeft / ppf) - 1, 0, Math.max(0, state.episode.length - 1));
@@ -54,7 +54,8 @@ export function createTimelineController(ctx) {
   function ensureFrameInView(frame) {
     if (!state.episode) return false;
     updateTimelineContentSize();
-    const scroller = els.curveScroll;
+    const scroller = els.timelineScroll?.isConnected ? els.timelineScroll : els.curveScroll;
+    if (!scroller) return false;
     const before = scroller.scrollLeft;
     const x = frameToX(frame);
     const margin = Math.max(40, scroller.clientWidth * 0.12);
@@ -63,7 +64,7 @@ export function createTimelineController(ctx) {
     } else if (x > scroller.scrollLeft + scroller.clientWidth - margin) {
       scroller.scrollLeft = clamp(x - scroller.clientWidth * 0.65, 0, Math.max(0, state.timelineContentWidth - scroller.clientWidth));
     }
-    syncHorizontalScroll(els.curveScroll);
+    syncHorizontalScroll(scroller);
     return before !== scroller.scrollLeft;
   }
 
@@ -77,12 +78,76 @@ export function createTimelineController(ctx) {
     return Math.max(1, Math.round(10 * pow));
   }
 
+  function thumbnailVideoKey() {
+    if (!state.episode?.video_keys?.length) return "";
+    return state.episode.video_keys.includes("observation.images.head_cam_h")
+      ? "observation.images.head_cam_h"
+      : state.episode.video_keys[0];
+  }
+
+  function frameUrl(frame) {
+    const key = thumbnailVideoKey();
+    if (!key) return "";
+    const params = new URLSearchParams({
+      episode_index: state.episodeIndex,
+      frame_index: frame,
+      video_key: key,
+      max_width: 220,
+    });
+    return `/api/frame?${params.toString()}`;
+  }
+
+  function renderThumbnails(start, end) {
+    const fps = ctx.frames.fps();
+    const stepFrames = Math.max(1, Math.round(fps * state.thumbnailIntervalSeconds));
+    const first = Math.max(0, Math.floor(start / stepFrames) * stepFrames);
+    for (let frame = first; frame < end; frame += stepFrames) {
+      const nextFrame = Math.min(state.episode.length, frame + stepFrames);
+      const node = document.createElement("div");
+      node.className = "timeline-thumb";
+      node.style.left = `${boundaryToX(frame)}px`;
+      node.style.width = `${Math.max(18, boundaryToX(nextFrame) - boundaryToX(frame))}px`;
+      node.style.backgroundImage = `url("${frameUrl(frame)}")`;
+      node.title = `Frame ${frame}`;
+      els.timeline.appendChild(node);
+    }
+  }
+
+  function renderDeletedOverlays(segments, start, end) {
+    for (const seg of segments) {
+      if (!seg.deleted) continue;
+      const segStart = Math.max(seg.start, start);
+      const segEnd = Math.min(seg.end, end);
+      if (segStart >= segEnd) continue;
+      const node = document.createElement("div");
+      node.className = "timeline-deleted-overlay";
+      node.style.left = `${boundaryToX(segStart)}px`;
+      node.style.width = `${Math.max(1, boundaryToX(segEnd) - boundaryToX(segStart))}px`;
+      els.timeline.appendChild(node);
+    }
+  }
+
+  function renderCutBoundaries(start, end) {
+    for (const cut of state.episode.cuts || []) {
+      if (cut < start || cut > end) continue;
+      const node = document.createElement("div");
+      node.className = "cut-boundary";
+      node.style.left = `${boundaryToX(cut)}px`;
+      els.timeline.appendChild(node);
+    }
+  }
+
   function renderTimeline() {
     if (!state.episode) return;
     updateTimelineContentSize();
     els.timeline.innerHTML = "";
     const { start, end } = visibleRange();
     const step = niceTickStep(end - start);
+    const segments = getSegments(state.episode.length, state.episode.cuts, state.episode.deleted_segments);
+
+    renderThumbnails(start, end);
+    renderDeletedOverlays(segments, start, end);
+    renderCutBoundaries(start, end);
 
     for (let tick = Math.ceil(start / step) * step; tick < end; tick += step) {
       const node = document.createElement("div");
@@ -94,7 +159,6 @@ export function createTimelineController(ctx) {
       els.timeline.appendChild(node);
     }
 
-    const segments = getSegments(state.episode.length, state.episode.cuts, state.episode.deleted_segments);
     for (const seg of segments) {
       const segStart = Math.max(seg.start, start);
       const segEnd = Math.min(seg.end, end);

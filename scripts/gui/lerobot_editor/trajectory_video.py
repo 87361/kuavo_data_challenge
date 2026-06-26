@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Callable, Iterator
 
 import av
 import cv2
@@ -48,6 +48,7 @@ except ImportError:  # pragma: no cover - direct script execution fallback
 
 DEFAULT_OUTPUT = Path("/tmp/kuavo_eef_trajectory_episode_000000_with_head_cam.mp4")
 DEFAULT_VIDEO_KEY = "observation.images.head_cam_h"
+ProgressCallback = Callable[[dict[str, Any]], None]
 
 
 def parse_args() -> argparse.Namespace:
@@ -266,6 +267,7 @@ def render_video(
     args: argparse.Namespace,
     left: np.ndarray,
     right: np.ndarray,
+    progress: ProgressCallback | None = None,
 ) -> Path:
     video_path = dataset.video_path(args.episode, args.video_key)
     if not video_path.exists():
@@ -322,7 +324,16 @@ def render_video(
             writer.write(cv2.cvtColor(combined_rgb, cv2.COLOR_RGB2BGR))
 
             if out_idx == 0 or (out_idx + 1) % 50 == 0 or out_idx + 1 == len(indices):
-                print(f"Rendered {out_idx + 1}/{len(indices)} frames")
+                message = f"Rendered {out_idx + 1}/{len(indices)} frames"
+                print(message)
+                if progress is not None:
+                    progress(
+                        {
+                            "status": "running",
+                            "message": message,
+                            "progress": 0.25 + 0.7 * ((out_idx + 1) / max(1, len(indices))),
+                        }
+                    )
     finally:
         writer.release()
 

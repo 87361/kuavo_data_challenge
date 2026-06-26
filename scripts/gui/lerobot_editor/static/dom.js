@@ -8,6 +8,15 @@ export function collectElements() {
     episodeJump: document.getElementById("episodeJump"),
     episodeIndicator: document.getElementById("episodeIndicator"),
     statusText: document.getElementById("statusText"),
+    dockRoot: document.getElementById("dockRoot"),
+    resetDockLayout: document.getElementById("resetDockLayout"),
+    dockPanelButtons: document.querySelectorAll("[data-dock-panel]"),
+    viewportPanelSource: document.getElementById("viewportPanelSource"),
+    timelinePanelSource: document.getElementById("timelinePanelSource"),
+    curvesPanelSource: document.getElementById("curvesPanelSource"),
+    annotationPanelSource: document.getElementById("annotationPanelSource"),
+    trajectoryPanelSource: document.getElementById("trajectoryPanelSource"),
+    terminalPanelSource: document.getElementById("terminalPanelSource"),
     viewer: document.getElementById("viewer"),
     videoGrid: document.getElementById("videoGrid"),
     viewerResizeHandle: document.getElementById("viewerResizeHandle"),
@@ -54,7 +63,10 @@ export function collectElements() {
     currentNotes: document.getElementById("currentNotes"),
     noteLabels: document.getElementById("noteLabels"),
     trajectoryVideo: document.getElementById("trajectoryVideo"),
+    trajectoryProgressBar: document.getElementById("trajectoryProgressBar"),
     trajectoryStatus: document.getElementById("trajectoryStatus"),
+    terminalLog: document.getElementById("terminalLog"),
+    clearTerminal: document.getElementById("clearTerminal"),
   };
 }
 
