@@ -29,6 +29,15 @@ export function createVideoController(ctx) {
     return videoElements().filter((video) => video.dataset.failed !== "1");
   }
 
+  function applyPlaybackRate() {
+    const rate = clamp(Number(state.playbackRate) || 1, 0.5, 4);
+    state.playbackRate = rate;
+    for (const video of playableVideoElements()) {
+      video.playbackRate = rate;
+    }
+    if (els.playbackRate) els.playbackRate.value = String(rate);
+  }
+
   function renderFrameFallbacks() {
     for (const image of els.videoGrid.querySelectorAll("img.fallback-frame")) {
       const tile = image.closest(".camera");
@@ -149,6 +158,7 @@ export function createVideoController(ctx) {
       video.playsInline = true;
       video.preload = "auto";
       video.disablePictureInPicture = true;
+      video.playbackRate = state.playbackRate;
 
       const fallback = document.createElement("img");
       fallback.className = "fallback-frame";
@@ -182,6 +192,7 @@ export function createVideoController(ctx) {
     });
     applyCameraFractions(false);
     initCameraResizeHandles();
+    applyPlaybackRate();
   }
 
   function stopPlayback() {
@@ -230,7 +241,7 @@ export function createVideoController(ctx) {
   }
 
   function startFrameFallbackPlayback() {
-    const intervalMs = 1000 / ctx.frames.fps();
+    const intervalMs = 1000 / (ctx.frames.fps() * Math.max(0.1, Number(state.playbackRate) || 1));
     state.timer = setInterval(() => {
       if (!state.episode) return;
       if (state.currentFrame >= state.episode.length - 1) {
@@ -248,6 +259,7 @@ export function createVideoController(ctx) {
       startFrameFallbackPlayback();
       return;
     }
+    applyPlaybackRate();
     const attempts = await Promise.allSettled(videos.map((video) => video.play()));
     const ok = attempts.some((result) => result.status === "fulfilled");
     if (!ok) {
@@ -274,10 +286,22 @@ export function createVideoController(ctx) {
     });
   }
 
+  function setPlaybackRate(rate) {
+    state.playbackRate = clamp(Number(rate) || 1, 0.5, 4);
+    localStorage.setItem(STORAGE.playbackRate, String(state.playbackRate));
+    applyPlaybackRate();
+    if (state.playing && state.timer) {
+      clearInterval(state.timer);
+      state.timer = null;
+      startFrameFallbackPlayback();
+    }
+  }
+
   return {
     playableVideoElements,
     renderFrameFallbacks,
     renderVideoGrid,
+    setPlaybackRate,
     syncVideosToFrame,
     stopPlayback,
     playPause,

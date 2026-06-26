@@ -9,6 +9,7 @@ export const STORAGE = {
   analysisWindow: "lerobotEditor.analysisWindow",
   analysisK: "lerobotEditor.analysisK",
   urdfPath: "lerobotEditor.urdfPath",
+  playbackRate: "lerobotEditor.playbackRate",
 };
 
 export function storedNumber(key, fallback) {

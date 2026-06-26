@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import mimetypes
 import os
 import threading
@@ -64,6 +66,19 @@ class EpisodeProgressRequest(BaseModel):
     completed: bool
 
 
+class EpisodeAnnotationRequest(BaseModel):
+    completed: bool | None = None
+    rating: int | None = None
+    notes: list[str] | None = None
+
+
+class TrajectoryPreviewRequest(BaseModel):
+    urdf_path: str | None = None
+    video_key: str | None = None
+    source: str = "state"
+    hand: str = "auto"
+
+
 class CoverageAnalysisRequest(BaseModel):
     window_seconds: float = 1.0
     cluster_count: int | str = "auto"
@@ -105,9 +120,13 @@ class AppState:
         self.urdf_path: Path | None = None
         self.transition_step_m = 0.025
         self.min_transition_frames = 2
-        self.max_transition_frames = 20
+        self.max_transition_frames = 60
+        self.canonical_source_path: Path | None = None
+        self.active_workspace_path: Path | None = None
         self.dataset: LeRobotV21Dataset | None = None
         self.edits: dict[str, Any] = {}
+        self.episode_annotations: dict[str, dict[str, Any]] = {}
+        self.note_labels: list[str] = []
         self.completed_episodes: set[int] = set()
         self.progress_saved_at: str | None = None
         self.last_export_path: str | None = None
@@ -127,6 +146,142 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 def _progress_path(dataset: LeRobotV21Dataset) -> Path:
     return dataset.root / ".lerobot_editor" / "progress.json"
+
+
+def _progress_path_for_root(root: Path) -> Path:
+    return root / ".lerobot_editor" / "progress.json"
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _read_json_file(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _manifest_path(root: Path) -> Path:
+    return root / "edit_manifest.json"
+
+
+def _editor_exports_root() -> Path:
+    return state.data_root / "lerobot_edits"
+
+
+def _source_slug(root: Path) -> str:
+    resolved = root.expanduser().resolve()
+    try:
+        base = resolved.parent if resolved.name == "lerobot" else resolved
+        rel = base.relative_to(state.data_root)
+        text = "_".join(rel.parts)
+    except ValueError:
+        parts = resolved.parts[-3:-1] if resolved.name == "lerobot" and len(resolved.parts) >= 3 else resolved.parts[-2:]
+        text = "_".join(parts)
+    safe = "".join(ch if ch.isalnum() or ch in {"_", "-", "."} else "_" for ch in text)
+    while "__" in safe:
+        safe = safe.replace("__", "_")
+    return safe.strip("_") or "lerobot"
+
+
+def _default_workspace_path(root: Path) -> Path:
+    return _editor_exports_root() / _source_slug(root) / "lerobot"
+
+
+def _resolve_manifest_root_source(manifest: dict[str, Any], manifest_root: Path, seen: set[Path] | None = None) -> Path | None:
+    root_value = manifest.get("root_source_dataset")
+    if root_value:
+        return Path(root_value).expanduser().resolve()
+    source_value = manifest.get("source_dataset")
+    if not source_value:
+        return None
+    source = Path(source_value).expanduser().resolve()
+    seen = seen or set()
+    if source in seen:
+        return source
+    seen.add(source)
+    nested_manifest = _manifest_path(source)
+    if nested_manifest.exists():
+        try:
+            nested = _read_json_file(nested_manifest)
+        except Exception:
+            return source
+        return _resolve_manifest_root_source(nested, source, seen) or source
+    return source
+
+
+def _resolve_canonical_source(root: str | Path) -> Path:
+    current = Path(root).expanduser().resolve()
+    seen: set[Path] = set()
+    while True:
+        if current in seen:
+            return current
+        seen.add(current)
+        manifest_path = _manifest_path(current)
+        if not manifest_path.exists():
+            return current
+        try:
+            manifest = _read_json_file(manifest_path)
+        except Exception:
+            return current
+        next_value = manifest.get("root_source_dataset") or manifest.get("source_dataset")
+        if not next_value:
+            return current
+        current = Path(next_value).expanduser().resolve()
+
+
+def _find_active_workspace(canonical_source: Path) -> Path | None:
+    exports_root = _editor_exports_root()
+    if not exports_root.exists():
+        return None
+    best: tuple[str, float, Path] | None = None
+    for manifest_path in exports_root.glob("**/edit_manifest.json"):
+        try:
+            manifest = _read_json_file(manifest_path)
+        except Exception:
+            continue
+        root_source = _resolve_manifest_root_source(manifest, manifest_path.parent)
+        if root_source != canonical_source:
+            continue
+        generated = str(manifest.get("generated_at") or "")
+        mtime = manifest_path.stat().st_mtime
+        candidate = (generated, mtime, manifest_path.parent)
+        if best is None or candidate[:2] > best[:2]:
+            best = candidate
+    return best[2] if best else None
+
+
+def _workspace_source_path(workspace: Path, canonical_source: Path) -> Path:
+    manifest_path = _manifest_path(workspace)
+    if not manifest_path.exists():
+        return canonical_source
+    try:
+        manifest = _read_json_file(manifest_path)
+    except Exception:
+        return canonical_source
+    source_value = manifest.get("source_dataset") or manifest.get("root_source_dataset")
+    if not source_value:
+        return canonical_source
+    return Path(source_value).expanduser().resolve()
+
+
+def _read_progress_payload(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        return _read_json_file(path)
+    except Exception:
+        return None
+
+
+def _progress_matches_dataset(payload: dict[str, Any], canonical_source: Path, active_dataset: Path) -> bool:
+    source = payload.get("root_source_dataset") or payload.get("source_dataset")
+    if source is None:
+        return True
+    try:
+        source_path = Path(source).expanduser().resolve()
+    except Exception:
+        return False
+    return source_path in {canonical_source, active_dataset}
 
 
 def _normalize_progress_edits(dataset: LeRobotV21Dataset, edits: dict[str, Any] | None) -> dict[str, Any]:
@@ -156,35 +311,193 @@ def _normalize_completed_episodes(dataset: LeRobotV21Dataset, episodes: Any) -> 
     return completed
 
 
+def _normalize_notes(notes: Any) -> list[str]:
+    values: list[str] = []
+    seen: set[str] = set()
+    for item in notes or []:
+        text = str(item).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        values.append(text)
+    return values
+
+
+def _normalize_note_labels(labels: Any) -> list[str]:
+    return _normalize_notes(labels)
+
+
+def _normalize_annotation(dataset: LeRobotV21Dataset, value: dict[str, Any] | None, fallback_saved_at: str | None = None) -> dict[str, Any]:
+    value = value or {}
+    rating = value.get("rating")
+    try:
+        rating_value = int(rating) if rating is not None else None
+    except (TypeError, ValueError):
+        rating_value = None
+    if rating_value is not None and not 1 <= rating_value <= 10:
+        rating_value = None
+    return {
+        "completed": bool(value.get("completed", False)),
+        "rating": rating_value,
+        "notes": _normalize_notes(value.get("notes")),
+        "updated_at": str(value.get("updated_at") or fallback_saved_at or _utc_now()),
+    }
+
+
+def _annotation_is_empty(value: dict[str, Any]) -> bool:
+    return not value.get("completed") and value.get("rating") is None and not value.get("notes")
+
+
+def _normalize_episode_annotations(
+    dataset: LeRobotV21Dataset,
+    annotations: Any,
+    completed_episodes: Any = None,
+    fallback_saved_at: str | None = None,
+) -> dict[str, dict[str, Any]]:
+    normalized: dict[str, dict[str, Any]] = {}
+    for key, value in (annotations or {}).items():
+        try:
+            episode_index = int(key)
+        except (TypeError, ValueError):
+            continue
+        if episode_index < 0 or episode_index >= len(dataset.episodes):
+            continue
+        annotation = _normalize_annotation(dataset, value, fallback_saved_at)
+        if not _annotation_is_empty(annotation):
+            normalized[str(episode_index)] = annotation
+
+    for episode_index in _normalize_completed_episodes(dataset, completed_episodes):
+        key = str(episode_index)
+        current = normalized.get(key) or {
+            "completed": False,
+            "rating": None,
+            "notes": [],
+            "updated_at": fallback_saved_at or _utc_now(),
+        }
+        current["completed"] = True
+        current["updated_at"] = current.get("updated_at") or fallback_saved_at or _utc_now()
+        normalized[key] = current
+    return normalized
+
+
+def _merge_episode_annotations(
+    current: dict[str, dict[str, Any]],
+    incoming: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    merged = dict(current)
+    for key, annotation in incoming.items():
+        existing = merged.get(key)
+        if existing is None or str(annotation.get("updated_at") or "") >= str(existing.get("updated_at") or ""):
+            merged[key] = annotation
+    return merged
+
+
+def _sync_completed_from_annotations() -> None:
+    state.completed_episodes = {
+        int(key)
+        for key, annotation in state.episode_annotations.items()
+        if annotation.get("completed")
+    }
+
+
+def _merge_note_labels(*groups: Any) -> list[str]:
+    labels: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for label in _normalize_note_labels(group):
+            if label in seen:
+                continue
+            seen.add(label)
+            labels.append(label)
+    return labels
+
+
+def _apply_progress_payload(dataset: LeRobotV21Dataset, payload: dict[str, Any]) -> None:
+    saved_at = payload.get("saved_at")
+    edits = _normalize_progress_edits(dataset, payload.get("edits"))
+    state.edits.update(edits)
+    annotations = _normalize_episode_annotations(
+        dataset,
+        payload.get("episode_annotations"),
+        payload.get("completed_episodes"),
+        saved_at,
+    )
+    state.episode_annotations = _merge_episode_annotations(state.episode_annotations, annotations)
+    state.note_labels = _merge_note_labels(state.note_labels, payload.get("note_labels"))
+    if saved_at and (state.progress_saved_at is None or str(saved_at) > str(state.progress_saved_at)):
+        state.progress_saved_at = str(saved_at)
+    last_export = payload.get("last_export_path") or payload.get("active_workspace_path")
+    if last_export:
+        state.last_export_path = str(last_export)
+
+
+def _apply_manifest_progress(dataset: LeRobotV21Dataset, manifest: dict[str, Any]) -> None:
+    manifest_edits: dict[str, Any] = {}
+    for key, entry in (manifest.get("episodes") or {}).items():
+        manifest_edits[key] = {
+            "cuts": entry.get("cuts", []),
+            "deleted_segments": entry.get("deleted_segments", []),
+        }
+    state.edits.update(_normalize_progress_edits(dataset, manifest_edits))
+    state.episode_annotations = _merge_episode_annotations(
+        state.episode_annotations,
+        _normalize_episode_annotations(
+            dataset,
+            manifest.get("episode_annotations"),
+            manifest.get("completed_episodes"),
+            manifest.get("generated_at"),
+        ),
+    )
+    state.note_labels = _merge_note_labels(state.note_labels, manifest.get("note_labels"))
+
+
+def _current_annotation(episode_index: int) -> dict[str, Any]:
+    return state.episode_annotations.get(
+        str(episode_index),
+        {"completed": False, "rating": None, "notes": [], "updated_at": None},
+    )
+
+
 def _progress_payload(dataset: LeRobotV21Dataset) -> dict[str, Any]:
     pending_export_episodes = _pending_export_episodes(dataset)
+    _sync_completed_from_annotations()
+    canonical = state.canonical_source_path or dataset.root
+    active_workspace = state.active_workspace_path or (
+        Path(state.last_export_path).expanduser().resolve() if state.last_export_path else None
+    )
     return {
-        "source_dataset": str(dataset.root),
+        "source_dataset": str(canonical),
+        "active_dataset": str(dataset.root),
+        "root_source_dataset": str(canonical),
         "saved_at": state.progress_saved_at,
         "edits": state.edits,
+        "episode_annotations": state.episode_annotations,
+        "note_labels": state.note_labels,
         "completed_episodes": sorted(state.completed_episodes),
         "completed_count": len(state.completed_episodes),
         "edited_count": len(state.edits),
         "pending_export_episodes": pending_export_episodes,
         "pending_export_count": len(pending_export_episodes),
         "total_episodes": len(dataset.episodes),
-        "last_export_path": state.last_export_path,
+        "active_workspace_path": str(active_workspace) if active_workspace else None,
+        "default_export_path": str(_default_workspace_path(canonical)),
+        "last_export_path": str(active_workspace) if active_workspace else state.last_export_path,
     }
 
 
 def _pending_export_episodes(dataset: LeRobotV21Dataset) -> list[int]:
-    if not state.last_export_path:
+    export_path = state.active_workspace_path or (Path(state.last_export_path).expanduser().resolve() if state.last_export_path else None)
+    if export_path is None:
         return sorted(int(key) for key in state.edits)
-    manifest_path = Path(state.last_export_path).expanduser().resolve() / "edit_manifest.json"
+    manifest_path = export_path / "edit_manifest.json"
     if not manifest_path.exists():
         return sorted(int(key) for key in state.edits)
     try:
-        import json
-
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest = _read_json_file(manifest_path)
     except Exception:
         return sorted(int(key) for key in state.edits)
-    if manifest.get("source_dataset") != str(dataset.root):
+    root_source = _resolve_manifest_root_source(manifest, export_path)
+    if root_source != (state.canonical_source_path or dataset.root):
         return sorted(int(key) for key in state.edits)
 
     pending: list[int] = []
@@ -203,34 +516,44 @@ def _pending_export_episodes(dataset: LeRobotV21Dataset) -> list[int]:
 
 def _load_progress(dataset: LeRobotV21Dataset) -> None:
     state.edits = {}
+    state.episode_annotations = {}
+    state.note_labels = []
     state.completed_episodes = set()
     state.progress_saved_at = None
-    state.last_export_path = None
-    path = _progress_path(dataset)
-    if not path.exists():
-        return
-    try:
-        import json
+    canonical = state.canonical_source_path or dataset.root
+    active_dataset = dataset.root
+    if state.active_workspace_path is not None:
+        manifest_path = _manifest_path(state.active_workspace_path)
+        if manifest_path.exists():
+            try:
+                _apply_manifest_progress(dataset, _read_json_file(manifest_path))
+            except Exception:
+                pass
+        state.last_export_path = str(state.active_workspace_path)
+    else:
+        state.last_export_path = str(_default_workspace_path(canonical))
 
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return
-    if payload.get("source_dataset") not in (None, str(dataset.root)):
-        return
-    state.edits = _normalize_progress_edits(dataset, payload.get("edits"))
-    state.completed_episodes = _normalize_completed_episodes(dataset, payload.get("completed_episodes"))
-    state.progress_saved_at = payload.get("saved_at")
-    state.last_export_path = payload.get("last_export_path")
+    source_payload = _read_progress_payload(_progress_path_for_root(canonical))
+    if source_payload and _progress_matches_dataset(source_payload, canonical, active_dataset):
+        _apply_progress_payload(dataset, source_payload)
+
+    if state.active_workspace_path is not None:
+        workspace_payload = _read_progress_payload(_progress_path_for_root(state.active_workspace_path))
+        if workspace_payload and _progress_matches_dataset(workspace_payload, canonical, active_dataset):
+            _apply_progress_payload(dataset, workspace_payload)
+
+    _sync_completed_from_annotations()
 
 
 def _save_progress(dataset: LeRobotV21Dataset) -> dict[str, Any]:
-    import json
-
-    state.progress_saved_at = datetime.now(timezone.utc).isoformat()
+    state.progress_saved_at = _utc_now()
     payload = _progress_payload(dataset)
-    path = _progress_path(dataset)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    paths = [_progress_path_for_root(state.canonical_source_path or dataset.root)]
+    if state.active_workspace_path is not None and state.active_workspace_path.exists():
+        paths.append(_progress_path_for_root(state.active_workspace_path))
+    for path in paths:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return payload
 
 
@@ -241,20 +564,42 @@ def index() -> FileResponse:
 
 @app.get("/api/datasets")
 def api_datasets() -> dict[str, Any]:
-    return {"datasets": [item.__dict__ for item in find_lerobot_datasets(state.data_root)]}
+    datasets: list[dict[str, Any]] = []
+    seen: set[Path] = set()
+    for item in find_lerobot_datasets(state.data_root):
+        canonical = _resolve_canonical_source(item.path)
+        item_path = Path(item.path).expanduser().resolve()
+        if canonical != item_path or canonical in seen:
+            continue
+        seen.add(canonical)
+        active_workspace = _find_active_workspace(canonical)
+        payload = item.__dict__.copy()
+        payload["canonical_source_path"] = str(canonical)
+        payload["active_workspace_path"] = str(active_workspace) if active_workspace else None
+        payload["default_export_path"] = str(_default_workspace_path(canonical))
+        datasets.append(payload)
+    return {"datasets": datasets}
 
 
 @app.post("/api/open")
 def api_open(req: OpenRequest) -> dict[str, Any]:
     try:
-        dataset = load_v21_dataset(req.path)
+        canonical = _resolve_canonical_source(req.path)
+        active_workspace = _find_active_workspace(canonical)
+        active_dataset_path = _workspace_source_path(active_workspace, canonical) if active_workspace else canonical
+        dataset = load_v21_dataset(active_dataset_path)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    state.canonical_source_path = canonical
+    state.active_workspace_path = active_workspace
     state.dataset = dataset
     _load_progress(dataset)
     state.analysis_job.reset()
     return {
-        "path": str(dataset.root),
+        "path": str(canonical),
+        "active_dataset": str(dataset.root),
+        "active_workspace_path": str(active_workspace) if active_workspace else None,
+        "default_export_path": str(_default_workspace_path(canonical)),
         "fps": dataset.fps,
         "total_episodes": len(dataset.episodes),
         "total_frames": int(dataset.info.get("total_frames") or 0),
@@ -293,6 +638,7 @@ def api_episode(episode_index: int) -> dict[str, Any]:
             "observation.state": dataframe_to_curve_payload(df, "observation.state"),
             "action": dataframe_to_curve_payload(df, "action"),
         },
+        "annotation": _current_annotation(episode_index),
         "cuts": edit["cuts"],
         "deleted_segments": edit["deleted_segments"],
         "segments": [seg.as_dict() for seg in build_segments(length, edit["cuts"], edit["deleted_segments"])],
@@ -380,6 +726,7 @@ def api_progress_save(req: ProgressSaveRequest) -> dict[str, Any]:
     dataset = state.require_dataset()
     if req.last_export_path is not None:
         state.last_export_path = req.last_export_path
+        state.active_workspace_path = Path(req.last_export_path).expanduser().resolve()
     return _save_progress(dataset)
 
 
@@ -388,10 +735,45 @@ def api_episode_progress(episode_index: int, req: EpisodeProgressRequest) -> dic
     dataset = state.require_dataset()
     if episode_index < 0 or episode_index >= len(dataset.episodes):
         raise HTTPException(status_code=404, detail="episode not found")
-    if req.completed:
-        state.completed_episodes.add(episode_index)
+    annotation = dict(_current_annotation(episode_index))
+    annotation["completed"] = bool(req.completed)
+    annotation["updated_at"] = _utc_now()
+    if _annotation_is_empty(annotation):
+        state.episode_annotations.pop(str(episode_index), None)
     else:
-        state.completed_episodes.discard(episode_index)
+        state.episode_annotations[str(episode_index)] = _normalize_annotation(dataset, annotation)
+    _sync_completed_from_annotations()
+    return _progress_payload(dataset)
+
+
+@app.post("/api/annotations/episode/{episode_index}")
+def api_episode_annotation(episode_index: int, req: EpisodeAnnotationRequest) -> dict[str, Any]:
+    dataset = state.require_dataset()
+    if episode_index < 0 or episode_index >= len(dataset.episodes):
+        raise HTTPException(status_code=404, detail="episode not found")
+    fields = getattr(req, "model_fields_set", None)
+    if fields is None:
+        fields = getattr(req, "__fields_set__", set())
+    annotation = dict(_current_annotation(episode_index))
+    if "completed" in fields:
+        annotation["completed"] = bool(req.completed)
+    if "rating" in fields:
+        if req.rating is None:
+            annotation["rating"] = None
+        elif 1 <= int(req.rating) <= 10:
+            annotation["rating"] = int(req.rating)
+        else:
+            raise HTTPException(status_code=400, detail="rating must be between 1 and 10")
+    if "notes" in fields:
+        annotation["notes"] = _normalize_notes(req.notes)
+        state.note_labels = _merge_note_labels(state.note_labels, annotation["notes"])
+    annotation["updated_at"] = _utc_now()
+    annotation = _normalize_annotation(dataset, annotation)
+    if _annotation_is_empty(annotation):
+        state.episode_annotations.pop(str(episode_index), None)
+    else:
+        state.episode_annotations[str(episode_index)] = annotation
+    _sync_completed_from_annotations()
     return _progress_payload(dataset)
 
 
@@ -420,13 +802,17 @@ def _run_export(req: ExportRequest) -> None:
             output_root=req.output_path,
             edits=state.edits,
             urdf_path=urdf_path,
+            root_source_dataset=state.canonical_source_path or dataset.root,
+            episode_annotations=state.episode_annotations,
+            note_labels=state.note_labels,
             transition_step_m=state.transition_step_m,
             min_transition_frames=state.min_transition_frames,
             max_transition_frames=state.max_transition_frames,
             video_codec=req.video_codec,
             progress=progress,
         )
-        state.last_export_path = req.output_path
+        state.active_workspace_path = Path(req.output_path).expanduser().resolve()
+        state.last_export_path = str(state.active_workspace_path)
         _save_progress(dataset)
         state.export_job.update(status="complete", message="export complete", progress=1.0, manifest=manifest)
     except Exception as exc:
@@ -446,6 +832,112 @@ def api_export(req: ExportRequest) -> dict[str, Any]:
 @app.get("/api/export/status")
 def api_export_status() -> dict[str, Any]:
     return state.export_job.as_dict()
+
+
+def _trajectory_cache_dir() -> Path:
+    root = state.active_workspace_path or state.canonical_source_path or state.require_dataset().root
+    return root / ".lerobot_editor" / "trajectory_previews"
+
+
+def _trajectory_cache_name(
+    dataset: LeRobotV21Dataset,
+    episode_index: int,
+    urdf_path: Path,
+    video_key: str,
+    source: str,
+    hand: str,
+) -> str:
+    edit = normalize_episode_edit(state.edits.get(str(episode_index)), dataset.episode_length(episode_index))
+    fingerprint = {
+        "dataset": str(dataset.root),
+        "episode": episode_index,
+        "urdf": str(urdf_path),
+        "urdf_mtime": urdf_path.stat().st_mtime_ns if urdf_path.exists() else None,
+        "video_key": video_key,
+        "source": source,
+        "hand": hand,
+        "edit": edit,
+    }
+    digest = hashlib.sha1(json.dumps(fingerprint, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+    return f"episode_{episode_index:06d}_{digest}.mp4"
+
+
+@app.post("/api/trajectory/episode/{episode_index}")
+def api_trajectory_preview(episode_index: int, req: TrajectoryPreviewRequest) -> dict[str, Any]:
+    dataset = state.require_dataset()
+    if episode_index < 0 or episode_index >= len(dataset.episodes):
+        raise HTTPException(status_code=404, detail="episode not found")
+    if req.source not in {"state", "action"}:
+        raise HTTPException(status_code=400, detail="source must be state or action")
+    if req.hand not in {"auto", "left", "right", "both"}:
+        raise HTTPException(status_code=400, detail="hand must be auto, left, right, or both")
+
+    requested_urdf = req.urdf_path.strip() if req.urdf_path else ""
+    urdf_path = Path(requested_urdf).expanduser().resolve() if requested_urdf else state.urdf_path
+    if urdf_path is None or not urdf_path.exists():
+        return {"status": "missing_urdf", "message": "Set a valid URDF path to generate the trajectory preview"}
+    state.urdf_path = urdf_path
+
+    video_key = req.video_key or (
+        "observation.images.head_cam_h"
+        if "observation.images.head_cam_h" in dataset.video_keys
+        else (dataset.video_keys[0] if dataset.video_keys else "")
+    )
+    if video_key not in dataset.video_keys:
+        raise HTTPException(status_code=404, detail=f"unknown video key: {video_key}")
+
+    cache_dir = _trajectory_cache_dir()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    output_path = cache_dir / _trajectory_cache_name(dataset, episode_index, urdf_path, video_key, req.source, req.hand)
+    cached = output_path.exists()
+    if not cached:
+        try:
+            try:
+                from .trajectory_video import render_video
+                from .trajectory_visualizer import load_episode_positions
+                from .urdf_fk import SimpleArmFk
+            except ImportError:  # pragma: no cover - direct script execution fallback
+                from trajectory_video import render_video
+                from trajectory_visualizer import load_episode_positions
+                from urdf_fk import SimpleArmFk
+
+            fk = SimpleArmFk(urdf_path)
+            left, right = load_episode_positions(dataset, episode_index, fk, req.source)
+            args = argparse.Namespace(
+                episode=episode_index,
+                video_key=video_key,
+                source=req.source,
+                hand=req.hand,
+                output=str(output_path),
+                title=None,
+                width=1280,
+                height=720,
+                dpi=120,
+                stride=1,
+                fps=None,
+                max_frames=None,
+                camera_left=False,
+                codec="mp4v",
+            )
+            render_video(dataset, args, left, right)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {
+        "status": "ready",
+        "url": f"/api/trajectory/preview/{output_path.name}",
+        "cached": cached,
+        "path": str(output_path),
+    }
+
+
+@app.get("/api/trajectory/preview/{filename}")
+def api_trajectory_preview_file(filename: str) -> FileResponse:
+    if "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="invalid filename")
+    path = _trajectory_cache_dir() / filename
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="trajectory preview not found")
+    return FileResponse(path, media_type="video/mp4", filename=filename, content_disposition_type="inline")
 
 
 def _run_coverage_analysis(req: CoverageAnalysisRequest) -> None:
@@ -512,7 +1004,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--urdf", default=os.environ.get("KUAVO_URDF_PATH"))
     parser.add_argument("--transition-step-m", type=float, default=0.025)
     parser.add_argument("--min-transition-frames", type=int, default=2)
-    parser.add_argument("--max-transition-frames", type=int, default=20)
+    parser.add_argument("--max-transition-frames", type=int, default=60)
     return parser.parse_args()
 
 

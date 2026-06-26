@@ -3,12 +3,85 @@ import { clamp, formatSavedAt } from "./utils.js";
 export function createProgressController(ctx) {
   const { state, els, api, setStatus } = ctx;
 
+  function defaultAnnotation() {
+    return { completed: false, rating: null, notes: [], updated_at: null };
+  }
+
+  function annotationMap() {
+    return state.progress?.episode_annotations || {};
+  }
+
+  function annotationFor(index = state.episodeIndex) {
+    return annotationMap()[String(index)]
+      || (state.episode?.episode_index === index ? state.episode.annotation : null)
+      || defaultAnnotation();
+  }
+
   function completedSet() {
-    return new Set(state.progress?.completed_episodes || []);
+    const completed = new Set(state.progress?.completed_episodes || []);
+    for (const [key, annotation] of Object.entries(annotationMap())) {
+      if (annotation?.completed) completed.add(Number(key));
+    }
+    return completed;
   }
 
   function isCurrentEpisodeComplete() {
     return state.episode ? completedSet().has(state.episodeIndex) : false;
+  }
+
+  function renderChipList(container, values, { empty = "-", asButtons = false } = {}) {
+    container.innerHTML = "";
+    if (!values.length) {
+      const chip = document.createElement("span");
+      chip.className = "note-chip empty";
+      chip.textContent = empty;
+      container.appendChild(chip);
+      return;
+    }
+    for (const value of values) {
+      const el = document.createElement(asButtons ? "button" : "span");
+      el.className = "note-chip";
+      el.textContent = value;
+      if (asButtons) el.dataset.note = value;
+      container.appendChild(el);
+    }
+  }
+
+  function renderAnnotation() {
+    const annotation = annotationFor();
+    const rating = annotation.rating ?? null;
+    els.ratingValue.textContent = rating ? `${rating} / 10` : "-";
+    for (const button of els.ratingButtons.querySelectorAll("button[data-rating]")) {
+      button.classList.toggle("active", Number(button.dataset.rating) === rating);
+      button.disabled = !state.episode;
+    }
+    els.noteInput.disabled = !state.episode;
+    els.addNote.disabled = !state.episode;
+    renderChipList(els.currentNotes, annotation.notes || [], { empty: "No notes" });
+    renderChipList(els.noteLabels, state.progress?.note_labels || [], {
+      empty: "No saved tags",
+      asButtons: true,
+    });
+  }
+
+  function renderTrajectoryPreview() {
+    if (!state.episode) {
+      els.trajectoryVideo.removeAttribute("src");
+      els.trajectoryVideo.load();
+      els.trajectoryStatus.textContent = "No episode loaded";
+      return;
+    }
+    const preview = state.trajectoryPreview;
+    if (preview?.episodeIndex === state.episodeIndex && preview.url) {
+      els.trajectoryVideo.src = preview.url;
+      els.trajectoryStatus.textContent = preview.cached ? "Cached preview" : "Preview ready";
+      return;
+    }
+    els.trajectoryVideo.removeAttribute("src");
+    els.trajectoryVideo.load();
+    els.trajectoryStatus.textContent = isCurrentEpisodeComplete()
+      ? "Preview not generated yet"
+      : "Mark an episode complete to generate a preview";
   }
 
   function renderProgress() {
@@ -30,11 +103,16 @@ export function createProgressController(ctx) {
     els.markComplete.textContent = complete ? "Unmark Complete" : "Mark Complete";
     els.markComplete.disabled = !state.episode;
     els.saveProgress.disabled = !state.dataset;
+    renderAnnotation();
+    renderTrajectoryPreview();
   }
 
   function applyProgress(payload) {
     state.progress = payload || null;
     state.progressDirty = false;
+    if (state.episode) {
+      state.episode.annotation = annotationFor(state.episodeIndex);
+    }
     renderProgress();
     ctx.episodes.renderEpisodeNav();
   }
@@ -69,6 +147,7 @@ export function createProgressController(ctx) {
   function markDirty({ autosave = true } = {}) {
     state.progressDirty = true;
     renderProgress();
+    ctx.episodes.renderEpisodeNav();
     if (autosave) scheduleSave();
   }
 
@@ -80,13 +159,57 @@ export function createProgressController(ctx) {
     markDirty();
   }
 
-  async function setEpisodeCompleted(episodeIndex, completed) {
-    const payload = await api(`/api/progress/episode/${episodeIndex}`, {
+  function currentFullAnnotation(patch = {}) {
+    const current = annotationFor();
+    return {
+      completed: Boolean(current.completed),
+      rating: current.rating ?? null,
+      notes: [...(current.notes || [])],
+      ...patch,
+    };
+  }
+
+  async function updateCurrentAnnotation(patch, { autosave = true, preview = false } = {}) {
+    if (!state.episode) return;
+    const body = currentFullAnnotation(patch);
+    const payload = await api(`/api/annotations/episode/${state.episodeIndex}`, {
       method: "POST",
-      body: JSON.stringify({ completed }),
+      body: JSON.stringify(body),
     });
     state.progress = payload;
-    markDirty();
+    state.episode.annotation = annotationFor(state.episodeIndex);
+    markDirty({ autosave });
+    if (preview && body.completed) {
+      generateTrajectoryPreview().catch((error) => {
+        els.trajectoryStatus.textContent = error.message;
+      });
+    }
+  }
+
+  async function setCurrentRating(rating) {
+    if (!state.episode) return;
+    await updateCurrentAnnotation({ rating: clamp(Math.round(rating), 1, 10) });
+    setStatus(`Score ${rating}/10`);
+  }
+
+  async function submitNote() {
+    const text = els.noteInput.value.trim();
+    if (!text || !state.episode) return;
+    await appendNote(text);
+    els.noteInput.value = "";
+  }
+
+  async function appendNote(text) {
+    if (!state.episode) return;
+    const notes = annotationFor().notes || [];
+    if (notes.includes(text)) return;
+    await updateCurrentAnnotation({ notes: [...notes, text] });
+    setStatus("Note saved");
+  }
+
+  async function setEpisodeCompleted(episodeIndex, completed) {
+    if (!state.episode || episodeIndex !== state.episodeIndex) return;
+    await updateCurrentAnnotation({ completed }, { preview: completed });
   }
 
   async function toggleCurrentComplete() {
@@ -94,14 +217,57 @@ export function createProgressController(ctx) {
     await setEpisodeCompleted(state.episodeIndex, !isCurrentEpisodeComplete());
   }
 
+  async function completeCurrentAndSave() {
+    if (!state.episode) return;
+    if (!isCurrentEpisodeComplete()) {
+      await setEpisodeCompleted(state.episodeIndex, true);
+    }
+    await saveProgress();
+  }
+
+  async function generateTrajectoryPreview() {
+    if (!state.episode) return;
+    els.trajectoryStatus.textContent = "Generating preview";
+    const videoKey = state.episode.video_keys.includes("observation.images.head_cam_h")
+      ? "observation.images.head_cam_h"
+      : state.episode.video_keys[0];
+    const payload = await api(`/api/trajectory/episode/${state.episodeIndex}`, {
+      method: "POST",
+      body: JSON.stringify({
+        urdf_path: els.urdfPath.value.trim() || null,
+        video_key: videoKey,
+        source: "state",
+        hand: "auto",
+      }),
+    });
+    if (payload.status === "missing_urdf") {
+      state.trajectoryPreview = null;
+      els.trajectoryVideo.removeAttribute("src");
+      els.trajectoryVideo.load();
+      els.trajectoryStatus.textContent = payload.message;
+      return;
+    }
+    state.trajectoryPreview = {
+      episodeIndex: state.episodeIndex,
+      url: payload.url,
+      cached: Boolean(payload.cached),
+    };
+    renderTrajectoryPreview();
+  }
+
   return {
     applyProgress,
+    appendNote,
+    completeCurrentAndSave,
+    generateTrajectoryPreview,
     isCurrentEpisodeComplete,
     loadProgress,
     markDirty,
     noteEdits,
     renderProgress,
     saveProgress,
+    setCurrentRating,
+    submitNote,
     toggleCurrentComplete,
   };
 }

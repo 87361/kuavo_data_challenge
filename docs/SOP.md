@@ -22,6 +22,18 @@ git clone -b tianchi --depth=1 https://github.com/LejuRobotics/kuavo_data_challe
 3.火山服务器-默认管理员root权限  用于训练模型，不要用tmux
 4.部署机  用于部署模型，有两张4090
 
+我的modelscope数据集：Xyyyhamster/robo_data_0626
+#上传本地处理好的数据目录
+ms upload Xyyyhamster/robo_data_0626 /path/to/processed_data --repo-type dataset --commit-message "upload processed dataset"
+
+## 数据集清洗工具：
+端口清理+启动：
+```bash
+ss -ltnp 'sport = :18080 or sport = :18081'
+ss -ltnp 'sport = :18080 or sport = :18081' | sed -n 's/.*pid=\([0-9]\+\).*/\1/p' | xargs -r kill
+python scripts/gui/lerobot_editor/server.py --host 127.0.0.1 --port 18080
+```
+
 ## 真机赛 Task1 smoke 流程（50 条 real_suzhou_3.0，ACT，LeRobot v2.1/v3.0）
 
 手册关键值：分支用 `tianchi`；真机图像 `848x480`；task1 夹爪 `leju_claw`；本次训练不用 depth。

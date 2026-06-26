@@ -6,6 +6,7 @@ export function createLayoutController(ctx) {
   function updateControlValues() {
     els.zoomSlider.value = String(state.zoom);
     els.curveScale.value = String(state.curveScale);
+    if (els.playbackRate) els.playbackRate.value = String(state.playbackRate);
     if ([...els.curveGroup.options].some((option) => option.value === state.curveGroup)) {
       els.curveGroup.value = state.curveGroup;
     } else {

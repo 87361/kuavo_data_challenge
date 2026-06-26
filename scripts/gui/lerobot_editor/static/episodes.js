@@ -11,7 +11,9 @@ export function createEpisodeController(ctx) {
     for (const item of state.datasets) {
       const option = document.createElement("option");
       option.value = item.path;
-      option.textContent = `${item.version} ${item.editable ? "" : "(view only)"} ${item.path}`;
+      const workspace = item.active_workspace_path || item.default_export_path || "";
+      const suffix = workspace ? `  -> editing ${workspace}` : "";
+      option.textContent = `${item.version} ${item.editable ? "" : "(view only)"} ${item.path}${suffix}`;
       option.disabled = !item.editable;
       els.datasetSelect.appendChild(option);
     }
@@ -21,9 +23,10 @@ export function createEpisodeController(ctx) {
   }
 
   function defaultExportPath(datasetPath) {
-    const stamp = new Date().toISOString().replaceAll(":", "").replace(/\..+/, "").replace("T", "_");
-    const name = datasetPath.split("/").filter(Boolean).slice(-3, -1).join("_") || "lerobot";
-    return `/mnt/data/kuavo_tianchi/lerobot_edits/${name}_edited_${stamp}/lerobot`;
+    const parts = datasetPath.split("/").filter(Boolean);
+    const base = parts[parts.length - 1] === "lerobot" ? parts.slice(-3, -1) : parts.slice(-2);
+    const name = (base.join("_") || "lerobot").replaceAll(/[^A-Za-z0-9_.-]/g, "_");
+    return `/mnt/data/kuavo_tianchi/lerobot_edits/${name}/lerobot`;
   }
 
   function renderEpisodeNav() {
@@ -41,20 +44,18 @@ export function createEpisodeController(ctx) {
     const path = els.datasetSelect.value;
     if (!path) return;
     ctx.video.stopPlayback();
-    ctx.analysis.stopAnalysisPolling();
     setStatus("Loading dataset");
     state.dataset = await api("/api/open", { method: "POST", body: JSON.stringify({ path }) });
     state.progress = state.dataset.progress || null;
-    state.analysisResult = null;
     state.history = [];
     state.future = [];
-    els.exportPath.value = state.progress?.last_export_path || defaultExportPath(path);
+    els.exportPath.value = state.progress?.last_export_path || state.dataset.default_export_path || defaultExportPath(path);
     if (!els.urdfPath.value.trim()) {
       els.urdfPath.value = storedString(STORAGE.urdfPath, "") || state.dataset.urdf_path || "";
     }
-    els.datasetName.textContent = state.dataset.path.split("/").slice(-3).join("/");
+    const active = state.dataset.active_workspace_path ? ` -> ${state.dataset.active_workspace_path}` : "";
+    els.datasetName.textContent = `${state.dataset.path.split("/").slice(-3).join("/")}${active}`;
     ctx.progress.applyProgress(state.progress);
-    ctx.analysis.renderAnalysisResult();
     await loadEpisode(0);
     setStatus("Ready");
   }

@@ -333,6 +333,77 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.annotation-editor {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.annotation-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.annotation-heading strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.rating-buttons {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.rating-buttons button {
+  width: 100%;
+  padding: 0;
+}
+
+.rating-buttons button.active {
+  border-color: var(--amber);
+  background: #6a5320;
+}
+
+.note-input {
+  width: 100%;
+  height: auto;
+  min-height: 68px;
+  resize: vertical;
+  padding: 8px 10px;
+}
+
+.chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 24px;
+}
+
+.chip-list button,
+.note-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-height: 26px;
+  height: auto;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  background: #151a1f;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.note-chip.empty {
+  color: var(--muted);
+  border-style: dashed;
+}
+
 .analysis-panel {
   display: grid;
   align-content: start;
@@ -394,9 +465,41 @@ button:disabled {
   border-radius: 3px;
 }
 
+.trajectory-panel {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.trajectory-panel video {
+  width: 100%;
+  min-height: 160px;
+  max-height: 260px;
+  object-fit: contain;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #050607;
+}
+
+.trajectory-panel video:not([src]) {
+  display: none;
+}
+
+.trajectory-status {
+  min-height: 18px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 .transport {
   display: grid;
-  grid-template-columns: 48px 72px 48px 68px 82px 70px 70px minmax(180px, 0.7fr) minmax(260px, 1fr) 78px;
+  grid-template-columns: 48px 72px 76px 48px 68px 82px 70px 70px minmax(180px, 0.7fr) minmax(260px, 1fr) 78px;
   gap: 8px;
   align-items: center;
   padding: 7px 14px;
@@ -411,6 +514,11 @@ button:disabled {
 
 .urdf-field {
   width: 100%;
+}
+
+.playback-rate {
+  width: 100%;
+  min-width: 0;
 }
 
 .main-resize-handle {

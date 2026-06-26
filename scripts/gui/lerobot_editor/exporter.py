@@ -126,24 +126,99 @@ def compute_episode_stats(
     return _to_jsonable(stats)
 
 
+def _clamp_tangent(tangent: np.ndarray, delta: np.ndarray) -> np.ndarray:
+    limit = max(float(np.linalg.norm(delta)) * 1.5, 1e-6)
+    norm = float(np.linalg.norm(tangent))
+    if norm <= limit:
+        return tangent
+    return tangent / norm * limit
+
+
+def _smoothstep(alpha: float) -> float:
+    return alpha * alpha * alpha * (alpha * (alpha * 6.0 - 15.0) + 10.0)
+
+
+def _cubic_hermite(
+    left: np.ndarray,
+    right: np.ndarray,
+    left_prev: np.ndarray | None,
+    right_next: np.ndarray | None,
+    frame_count: int,
+    alpha: float,
+) -> np.ndarray:
+    delta = right - left
+    if left_prev is None and right_next is None:
+        eased = _smoothstep(alpha)
+        return (1.0 - eased) * left + eased * right
+
+    scale = float(frame_count + 1)
+    m0 = (left - left_prev) * scale if left_prev is not None else np.zeros_like(delta)
+    m1 = (right_next - right) * scale if right_next is not None else np.zeros_like(delta)
+    m0 = _clamp_tangent(m0, delta)
+    m1 = _clamp_tangent(m1, delta)
+
+    t = alpha
+    t2 = t * t
+    t3 = t2 * t
+    h00 = 2.0 * t3 - 3.0 * t2 + 1.0
+    h10 = t3 - 2.0 * t2 + t
+    h01 = -2.0 * t3 + 3.0 * t2
+    h11 = t3 - t2
+    return h00 * left + h10 * m0 + h01 * right + h11 * m1
+
+
 def interpolate_rows(
     left_row: pd.Series,
     right_row: pd.Series,
     frame_count: int,
+    left_prev_row: pd.Series | None = None,
+    right_next_row: pd.Series | None = None,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     left_state = _as_vector(left_row["observation.state"])
     right_state = _as_vector(right_row["observation.state"])
     left_action = _as_vector(left_row["action"])
     right_action = _as_vector(right_row["action"])
+    left_prev_state = _as_vector(left_prev_row["observation.state"]) if left_prev_row is not None else None
+    right_next_state = _as_vector(right_next_row["observation.state"]) if right_next_row is not None else None
+    left_prev_action = _as_vector(left_prev_row["action"]) if left_prev_row is not None else None
+    right_next_action = _as_vector(right_next_row["action"]) if right_next_row is not None else None
     for idx in range(frame_count):
         alpha = float(idx + 1) / float(frame_count + 1)
         row = left_row.to_dict()
-        row["observation.state"] = ((1.0 - alpha) * left_state + alpha * right_state).astype(np.float32)
-        row["action"] = ((1.0 - alpha) * left_action + alpha * right_action).astype(np.float32)
+        row["observation.state"] = _cubic_hermite(
+            left_state,
+            right_state,
+            left_prev_state,
+            right_next_state,
+            frame_count,
+            alpha,
+        ).astype(np.float32)
+        row["action"] = _cubic_hermite(
+            left_action,
+            right_action,
+            left_prev_action,
+            right_next_action,
+            frame_count,
+            alpha,
+        ).astype(np.float32)
         row["_synthetic_transition"] = True
         rows.append(row)
     return rows
+
+
+def average_moving_eef_step(source_df: pd.DataFrame, fk: SimpleArmFk, threshold_m: float = 1e-4) -> float | None:
+    if len(source_df) < 2:
+        return None
+    distances: list[float] = []
+    values = source_df["observation.state"].tolist()
+    for left, right in zip(values[:-1], values[1:]):
+        distance = fk.max_eef_distance(left, right)
+        if distance > threshold_m:
+            distances.append(float(distance))
+    if not distances:
+        return None
+    return float(np.mean(distances))
 
 
 def build_output_dataframe(
@@ -165,30 +240,40 @@ def build_output_dataframe(
 
     rows: list[dict[str, Any]] = []
     transitions: list[dict[str, Any]] = []
+    avg_moving_step = average_moving_eef_step(source_df, fk) if fk is not None else None
     for range_idx, (start, end) in enumerate(ranges):
         if range_idx > 0:
             prev_end = ranges[range_idx - 1][1]
             if prev_end < start:
+                previous_range_start = ranges[range_idx - 1][0]
+                current_range_end = end
                 left_row = source_df.iloc[prev_end - 1]
                 right_row = source_df.iloc[start]
+                left_prev_row = source_df.iloc[prev_end - 2] if prev_end - 2 >= previous_range_start else None
+                right_next_row = source_df.iloc[start + 1] if start + 1 < current_range_end else None
                 distance = None
+                step_for_frames = None
                 if fk is not None:
                     distance = fk.max_eef_distance(left_row["observation.state"], right_row["observation.state"])
+                    step_for_frames = avg_moving_step if avg_moving_step and avg_moving_step > 0 else transition_step_m
                     frames = transition_frame_count(
                         distance,
-                        step_m=transition_step_m,
+                        step_m=step_for_frames,
                         min_frames=min_transition_frames,
                         max_frames=max_transition_frames,
                     )
                 else:
                     frames = min_transition_frames
-                rows.extend(interpolate_rows(left_row, right_row, frames))
+                rows.extend(interpolate_rows(left_row, right_row, frames, left_prev_row, right_next_row))
                 transitions.append(
                     {
                         "from_source_frame": int(prev_end - 1),
                         "to_source_frame": int(start),
                         "deleted_range": [int(prev_end), int(start)],
                         "eef_distance_m": float(distance) if distance is not None else None,
+                        "avg_moving_eef_step_m": float(avg_moving_step) if avg_moving_step is not None else None,
+                        "frame_step_m": float(step_for_frames) if step_for_frames is not None else None,
+                        "transition_method": "cubic_hermite",
                         "transition_frames": int(frames),
                     }
                 )
@@ -250,6 +335,25 @@ def _episode_output_files_exist(dataset: LeRobotV21Dataset, output_root: Path, e
 
 def _read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _manifest_root_source(manifest: dict[str, Any], seen: set[Path] | None = None) -> str | None:
+    value = manifest.get("root_source_dataset") or manifest.get("source_dataset")
+    if not value:
+        return None
+    root = Path(value).expanduser().resolve()
+    seen = seen or set()
+    if root in seen:
+        return str(root)
+    seen.add(root)
+    nested = root / "edit_manifest.json"
+    if nested.exists():
+        try:
+            nested_manifest = _read_json(nested)
+        except Exception:
+            return str(root)
+        return _manifest_root_source(nested_manifest, seen) or str(root)
+    return str(root)
 
 
 def _clear_directory(path: Path) -> None:
@@ -410,9 +514,12 @@ def export_v21_dataset(
     output_root: str | Path,
     edits: dict[str, Any],
     urdf_path: str | Path | None,
+    root_source_dataset: str | Path | None = None,
+    episode_annotations: dict[str, Any] | None = None,
+    note_labels: list[str] | None = None,
     transition_step_m: float = 0.025,
     min_transition_frames: int = 2,
-    max_transition_frames: int = 20,
+    max_transition_frames: int = 60,
     video_codec: str | None = None,
     progress: ProgressCallback | None = None,
 ) -> dict[str, Any]:
@@ -425,24 +532,30 @@ def export_v21_dataset(
     fk = SimpleArmFk(urdf_path) if urdf_path is not None else None
     codec = choose_video_codec(video_codec)
     resolved_urdf = str(Path(urdf_path).expanduser().resolve()) if urdf_path is not None else None
+    resolved_root_source = (
+        str(Path(root_source_dataset).expanduser().resolve())
+        if root_source_dataset is not None
+        else str(dataset.root)
+    )
     transition_config = {
-        "mode": "adaptive_eef_distance" if fk is not None else "fixed_frame_count",
-        "step_m": transition_step_m,
+        "mode": "adaptive_eef_average_speed" if fk is not None else "fixed_frame_count",
+        "fallback_step_m": transition_step_m,
         "min_frames": min_transition_frames,
         "max_frames": max_transition_frames,
         "video_crossfade": "endpoint_alpha_blend",
-        "state_action": "linear_interpolation",
+        "state_action": "cubic_hermite",
     }
 
     manifest_path = output / "edit_manifest.json"
     previous_manifest: dict[str, Any] | None = None
     if manifest_path.exists():
         previous_manifest = _read_json(manifest_path)
+        previous_root_source = _manifest_root_source(previous_manifest)
         settings_match = (
             previous_manifest.get("source_dataset") == str(dataset.root)
+            and previous_root_source == resolved_root_source
             and previous_manifest.get("format") == "lerobot_v2.1"
             and previous_manifest.get("urdf_path") == resolved_urdf
-            and previous_manifest.get("transition") == transition_config
             and previous_manifest.get("video_codec") == codec
             and previous_manifest.get("video_keys") == dataset.video_keys
         )
@@ -580,6 +693,7 @@ def export_v21_dataset(
 
     manifest = {
         "source_dataset": str(dataset.root),
+        "root_source_dataset": resolved_root_source,
         "output_dataset": str(output),
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "format": "lerobot_v2.1",
@@ -588,6 +702,8 @@ def export_v21_dataset(
         "transition": transition_config,
         "video_codec": codec,
         "video_keys": dataset.video_keys,
+        "episode_annotations": episode_annotations or {},
+        "note_labels": note_labels or [],
         "regenerated_episodes": regenerated_episodes,
         "reindexed_episodes": reindexed_episodes,
         "episodes": manifest_episodes,

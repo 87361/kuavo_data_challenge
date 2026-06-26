@@ -1,5 +1,4 @@
 import { api } from "./api.js";
-import { createAnalysisController } from "./analysis.js";
 import { createCurveController } from "./curves.js";
 import { collectElements, createStatus } from "./dom.js";
 import { createEditController } from "./edits.js";
@@ -27,7 +26,6 @@ ctx.metrics = createMetricsController(ctx);
 ctx.video = createVideoController(ctx);
 ctx.timeline = createTimelineController(ctx);
 ctx.curves = createCurveController(ctx);
-ctx.analysis = createAnalysisController(ctx);
 ctx.progress = createProgressController(ctx);
 ctx.episodes = createEpisodeController(ctx);
 ctx.edits = createEditController(ctx);
@@ -54,19 +52,27 @@ function bindEvents() {
   els.prevFrame.addEventListener("click", () => ctx.frames.moveFrame(-1));
   els.nextFrame.addEventListener("click", () => ctx.frames.moveFrame(1));
   els.playPause.addEventListener("click", ctx.video.playPause);
+  els.playbackRate.addEventListener("change", () => ctx.video.setPlaybackRate(Number(els.playbackRate.value) || 1));
   els.cutFrame.addEventListener("click", () => ctx.edits.cutAtFrame().catch((err) => ctx.setStatus(err.message)));
   els.deleteSegment.addEventListener("click", () => ctx.edits.toggleDeleteSegment().catch((err) => ctx.setStatus(err.message)));
   els.undoEdit.addEventListener("click", () => ctx.edits.undo().catch((err) => ctx.setStatus(err.message)));
   els.redoEdit.addEventListener("click", () => ctx.edits.redo().catch((err) => ctx.setStatus(err.message)));
   els.markComplete.addEventListener("click", () => ctx.progress.toggleCurrentComplete().catch((err) => ctx.setStatus(err.message)));
   els.saveProgress.addEventListener("click", () => ctx.progress.saveProgress().catch((err) => ctx.setStatus(err.message)));
+  els.ratingButtons.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-rating]");
+    if (!button) return;
+    ctx.progress.setCurrentRating(Number(button.dataset.rating)).catch((err) => ctx.setStatus(err.message));
+  });
+  els.addNote.addEventListener("click", () => ctx.progress.submitNote().catch((err) => ctx.setStatus(err.message)));
+  els.noteLabels.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-note]");
+    if (!button) return;
+    ctx.progress.appendNote(button.dataset.note).catch((err) => ctx.setStatus(err.message));
+  });
   els.exportDataset.addEventListener("click", () => ctx.exporter.exportDataset().catch((err) => {
     els.exportDataset.disabled = false;
     ctx.setStatus(err.message);
-  }));
-  els.runAnalysis.addEventListener("click", () => ctx.analysis.runCoverageAnalysis().catch((err) => {
-    ctx.analysis.stopAnalysisPolling();
-    els.analysisStatus.textContent = err.message;
   }));
 
   els.timeline.addEventListener("click", ctx.timeline.handleTimelineClick);
@@ -98,7 +104,17 @@ function bindEvents() {
   document.addEventListener("keydown", (event) => {
     const tag = document.activeElement?.tagName;
     if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
-    if (event.key === "ArrowLeft") {
+    if (/^[0-9]$/.test(event.key)) {
+      event.preventDefault();
+      const rating = event.key === "0" ? 10 : Number(event.key);
+      ctx.progress.setCurrentRating(rating).catch((err) => ctx.setStatus(err.message));
+    } else if (event.key.toLowerCase() === "s") {
+      event.preventDefault();
+      ctx.progress.completeCurrentAndSave().catch((err) => ctx.setStatus(err.message));
+    } else if (event.key.toLowerCase() === "n") {
+      event.preventDefault();
+      ctx.episodes.moveEpisode(1).catch((err) => ctx.setStatus(err.message));
+    } else if (event.key === "ArrowLeft") {
       event.preventDefault();
       ctx.frames.moveFrame(-1);
     } else if (event.key === "ArrowRight") {
@@ -127,7 +143,6 @@ function bindEvents() {
 function init() {
   bindEvents();
   ctx.layout.initResizeHandle();
-  ctx.analysis.initAnalysisControls();
   ctx.layout.updateControlValues();
   ctx.progress.renderProgress();
   ctx.episodes.renderEpisodeNav();

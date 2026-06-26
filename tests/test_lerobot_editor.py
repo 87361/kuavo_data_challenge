@@ -332,8 +332,12 @@ def test_export_endpoint_accepts_urdf_path_from_request(tmp_path: Path) -> None:
     urdf = make_test_urdf(tmp_path / "test.urdf")
     output = tmp_path / "api_out" / "task" / "lerobot"
     state.dataset = load_v21_dataset(source)
+    state.canonical_source_path = source
+    state.active_workspace_path = None
     state.urdf_path = None
     state.edits = {"0": {"cuts": [2, 4], "deleted_segments": [1]}}
+    state.episode_annotations = {}
+    state.note_labels = []
     state.export_job.status = "idle"
     client = TestClient(app)
 
@@ -350,13 +354,17 @@ def test_export_endpoint_accepts_urdf_path_from_request(tmp_path: Path) -> None:
         time.sleep(0.05)
     assert status["status"] == "complete"
     assert status["manifest"]["urdf_path"] == str(urdf.resolve())
-    assert status["manifest"]["transition"]["mode"] == "adaptive_eef_distance"
+    assert status["manifest"]["transition"]["mode"] == "adaptive_eef_average_speed"
 
 
 def test_progress_save_load_and_restore_edits(tmp_path: Path) -> None:
     source = make_v21_dataset(tmp_path / "dataset" / "task" / "lerobot", episode_count=2)
     state.dataset = None
+    state.canonical_source_path = None
+    state.active_workspace_path = None
     state.edits = {}
+    state.episode_annotations = {}
+    state.note_labels = []
     state.completed_episodes = set()
     state.progress_saved_at = None
     state.last_export_path = None
@@ -386,6 +394,145 @@ def test_progress_save_load_and_restore_edits(tmp_path: Path) -> None:
     episode = client.get("/api/episode/1").json()
     assert episode["cuts"] == [2, 4]
     assert episode["deleted_segments"] == [1]
+
+
+def test_legacy_completed_progress_migrates_to_episode_annotations(tmp_path: Path) -> None:
+    source = make_v21_dataset(tmp_path / "dataset" / "task" / "lerobot", episode_count=2)
+    write_json(
+        source / ".lerobot_editor" / "progress.json",
+        {
+            "source_dataset": str(source),
+            "saved_at": "2026-06-25T00:00:00+00:00",
+            "completed_episodes": [1],
+            "edits": {},
+        },
+    )
+    state.dataset = None
+    state.canonical_source_path = None
+    state.active_workspace_path = None
+    state.edits = {}
+    state.episode_annotations = {}
+    state.note_labels = []
+    client = TestClient(app)
+
+    response = client.post("/api/open", json={"path": str(source)})
+
+    progress = response.json()["progress"]
+    assert progress["completed_episodes"] == [1]
+    assert progress["episode_annotations"]["1"]["completed"] is True
+
+
+def test_annotation_rating_notes_save_and_reopen(tmp_path: Path) -> None:
+    source = make_v21_dataset(tmp_path / "dataset" / "task" / "lerobot", episode_count=2)
+    state.dataset = None
+    state.canonical_source_path = None
+    state.active_workspace_path = None
+    state.edits = {}
+    state.episode_annotations = {}
+    state.note_labels = []
+    client = TestClient(app)
+
+    assert client.post("/api/open", json={"path": str(source)}).status_code == 200
+    response = client.post(
+        "/api/annotations/episode/1",
+        json={"completed": True, "rating": 10, "notes": ["good", "good", ""]},
+    )
+    assert response.status_code == 200
+    saved = client.post("/api/progress/save", json={}).json()
+    assert saved["completed_episodes"] == [1]
+    assert saved["episode_annotations"]["1"]["rating"] == 10
+    assert saved["episode_annotations"]["1"]["notes"] == ["good"]
+    assert saved["note_labels"] == ["good"]
+
+    reopened = client.post("/api/open", json={"path": str(source)}).json()
+    annotation = reopened["progress"]["episode_annotations"]["1"]
+    assert annotation["completed"] is True
+    assert annotation["rating"] == 10
+    assert annotation["notes"] == ["good"]
+    episode = client.get("/api/episode/1").json()
+    assert episode["annotation"]["rating"] == 10
+
+
+def test_open_source_dataset_adopts_latest_legacy_workspace(tmp_path: Path) -> None:
+    source = make_v21_dataset(tmp_path / "dataset" / "task" / "lerobot", episode_count=2)
+    first = tmp_path / "lerobot_edits" / "task_edited_day1" / "lerobot"
+    second = tmp_path / "lerobot_edits" / "task_edited_day2" / "lerobot"
+    export_v21_dataset(
+        source,
+        first,
+        edits={"0": {"cuts": [2, 4], "deleted_segments": [1]}},
+        urdf_path=None,
+        video_codec="mpeg4",
+    )
+    time.sleep(0.02)
+    export_v21_dataset(
+        first,
+        second,
+        edits={"1": {"cuts": [2, 4], "deleted_segments": [1]}},
+        urdf_path=None,
+        root_source_dataset=source,
+        video_codec="mpeg4",
+    )
+    state.data_root = tmp_path
+    client = TestClient(app)
+
+    datasets = client.get("/api/datasets").json()["datasets"]
+    assert [item["path"] for item in datasets] == [str(source)]
+    assert datasets[0]["active_workspace_path"] == str(second.resolve())
+
+    opened = client.post("/api/open", json={"path": str(source)}).json()
+    assert opened["path"] == str(source.resolve())
+    assert opened["active_dataset"] == str(first.resolve())
+    assert opened["active_workspace_path"] == str(second.resolve())
+    assert opened["progress"]["last_export_path"] == str(second.resolve())
+
+
+def test_annotation_only_export_does_not_rewrite_video(tmp_path: Path) -> None:
+    source = make_v21_dataset(tmp_path / "dataset" / "task" / "lerobot")
+    output = tmp_path / "out" / "task" / "lerobot"
+    export_v21_dataset(source, output, edits={}, urdf_path=None, video_codec="mpeg4")
+    video = output / "videos" / "chunk-000" / "observation.images.head_cam_h" / "episode_000000.mp4"
+    before = video.stat().st_mtime_ns
+    time.sleep(0.02)
+
+    manifest = export_v21_dataset(
+        source,
+        output,
+        edits={},
+        urdf_path=None,
+        episode_annotations={"0": {"completed": True, "rating": 8, "notes": ["ok"]}},
+        note_labels=["ok"],
+        video_codec="mpeg4",
+    )
+
+    assert video.stat().st_mtime_ns == before
+    assert manifest["episode_annotations"]["0"]["rating"] == 8
+    assert manifest["note_labels"] == ["ok"]
+
+
+def test_middle_delete_uses_non_linear_transition(tmp_path: Path) -> None:
+    source = make_v21_dataset(tmp_path / "dataset" / "task" / "lerobot", frames_per_episode=6)
+    urdf = make_test_urdf(tmp_path / "test.urdf")
+    output = tmp_path / "out" / "task" / "lerobot"
+
+    manifest = export_v21_dataset(
+        source,
+        output,
+        edits={"0": {"cuts": [2, 4], "deleted_segments": [1]}},
+        urdf_path=urdf,
+        min_transition_frames=1,
+        max_transition_frames=10,
+        video_codec="mpeg4",
+    )
+
+    transition_frames = manifest["episodes"]["0"]["transitions"][0]["transition_frames"]
+    assert transition_frames >= 2
+    assert manifest["episodes"]["0"]["transitions"][0]["transition_method"] == "cubic_hermite"
+    df = pq.read_table(output / "data" / "chunk-000" / "episode_000000.parquet").to_pandas()
+    values = np.asarray([row[0] for row in df["observation.state"].tolist()], dtype=np.float32)
+    synthetic = values[2 : 2 + transition_frames]
+    linear = np.linspace(values[1], values[2 + transition_frames], transition_frames + 2, dtype=np.float32)[1:-1]
+    assert not np.allclose(synthetic, linear)
 
 
 def test_video_endpoint_serves_episode_video(tmp_path: Path) -> None:

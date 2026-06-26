@@ -13,6 +13,7 @@ export function collectElements() {
     viewerResizeHandle: document.getElementById("viewerResizeHandle"),
     prevFrame: document.getElementById("prevFrame"),
     playPause: document.getElementById("playPause"),
+    playbackRate: document.getElementById("playbackRate"),
     nextFrame: document.getElementById("nextFrame"),
     cutFrame: document.getElementById("cutFrame"),
     deleteSegment: document.getElementById("deleteSegment"),
@@ -46,11 +47,14 @@ export function collectElements() {
     markComplete: document.getElementById("markComplete"),
     saveProgress: document.getElementById("saveProgress"),
     progressStatus: document.getElementById("progressStatus"),
-    analysisWindow: document.getElementById("analysisWindow"),
-    analysisK: document.getElementById("analysisK"),
-    runAnalysis: document.getElementById("runAnalysis"),
-    analysisStatus: document.getElementById("analysisStatus"),
-    clusterLegend: document.getElementById("clusterLegend"),
+    ratingValue: document.getElementById("ratingValue"),
+    ratingButtons: document.getElementById("ratingButtons"),
+    noteInput: document.getElementById("noteInput"),
+    addNote: document.getElementById("addNote"),
+    currentNotes: document.getElementById("currentNotes"),
+    noteLabels: document.getElementById("noteLabels"),
+    trajectoryVideo: document.getElementById("trajectoryVideo"),
+    trajectoryStatus: document.getElementById("trajectoryStatus"),
   };
 }
 

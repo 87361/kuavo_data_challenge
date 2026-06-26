@@ -75,20 +75,39 @@
               <button id="saveProgress">Save Progress</button>
             </div>
             <div id="progressStatus" class="progress-status">Not loaded</div>
+            <div class="annotation-editor">
+              <div class="annotation-heading">
+                <span>Score</span>
+                <strong id="ratingValue">-</strong>
+              </div>
+              <div id="ratingButtons" class="rating-buttons">
+                <button data-rating="1" title="Keyboard 1">1</button>
+                <button data-rating="2" title="Keyboard 2">2</button>
+                <button data-rating="3" title="Keyboard 3">3</button>
+                <button data-rating="4" title="Keyboard 4">4</button>
+                <button data-rating="5" title="Keyboard 5">5</button>
+                <button data-rating="6" title="Keyboard 6">6</button>
+                <button data-rating="7" title="Keyboard 7">7</button>
+                <button data-rating="8" title="Keyboard 8">8</button>
+                <button data-rating="9" title="Keyboard 9">9</button>
+                <button data-rating="10" title="Keyboard 0">10</button>
+              </div>
+              <textarea id="noteInput" class="field note-input" rows="3" placeholder="Add note"></textarea>
+              <button id="addNote">Submit Note</button>
+              <div class="annotation-heading">
+                <span>Current Notes</span>
+              </div>
+              <div id="currentNotes" class="chip-list"></div>
+              <div class="annotation-heading">
+                <span>Saved Tags</span>
+              </div>
+              <div id="noteLabels" class="chip-list"></div>
+            </div>
           </div>
-          <div class="analysis-panel">
-            <div class="panel-title">Coverage Analysis</div>
-            <label class="analysis-field">
-              <span>Window</span>
-              <input id="analysisWindow" class="field" type="number" min="0.1" step="0.1" value="1" />
-            </label>
-            <label class="analysis-field">
-              <span>K</span>
-              <input id="analysisK" class="field" value="auto" />
-            </label>
-            <button id="runAnalysis" class="primary">Analyze</button>
-            <div id="analysisStatus" class="analysis-status">Not run</div>
-            <div id="clusterLegend" class="cluster-legend"></div>
+          <div class="trajectory-panel">
+            <div class="panel-title">Trajectory Preview</div>
+            <video id="trajectoryVideo" controls muted playsinline></video>
+            <div id="trajectoryStatus" class="trajectory-status">Mark an episode complete to generate a preview</div>
           </div>
         </aside>
       </section>
@@ -96,6 +115,14 @@
       <section class="transport">
         <button id="prevFrame" title="Previous frame">|&lt;</button>
         <button id="playPause" title="Play or pause">Play</button>
+        <select id="playbackRate" class="field playback-rate" title="Playback speed">
+          <option value="0.5">0.5x</option>
+          <option value="1">1x</option>
+          <option value="1.5">1.5x</option>
+          <option value="2">2x</option>
+          <option value="3">3x</option>
+          <option value="4">4x</option>
+        </select>
         <button id="nextFrame" title="Next frame">&gt;|</button>
         <button id="cutFrame" title="Cut at playhead">Cut</button>
         <button id="deleteSegment" title="Delete selected segment">Delete</button>
