@@ -3,7 +3,7 @@
 	url = https://github.com/huggingface/lerobot.git
 [submodule "third_party/kuavo-ros-opensource-kdc"]
 	path = third_party/kuavo-ros-opensource-kdc
-	url = https://github.com/LejuRobotics/kuavo-ros-opensource.git
+	url = git@github.com:87361/kuavo-ros-opensource.git
 [submodule "third_party/openpi"]
 	path = third_party/openpi
-	url = https://github.com/Physical-Intelligence/openpi.git
+	url = git@github.com:87361/openpi.git
