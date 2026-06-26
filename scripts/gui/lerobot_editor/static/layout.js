@@ -4,6 +4,9 @@ export function createLayoutController(ctx) {
   const { state, els } = ctx;
 
   function updateControlValues() {
+    const hasDataset = Boolean(state.dataset);
+    const hasEpisode = Boolean(state.episode);
+    const editable = Boolean(state.dataset?.editable);
     if (els.zoomSlider) els.zoomSlider.value = String(state.zoom);
     if (els.curveScale) els.curveScale.value = String(state.curveScale);
     if (els.playbackRate) els.playbackRate.value = String(state.playbackRate);
@@ -13,6 +16,13 @@ export function createLayoutController(ctx) {
       els.curveGroup.value = "left";
       state.curveGroup = "left";
     }
+    if (els.cutFrame) els.cutFrame.disabled = !hasEpisode || !editable;
+    if (els.deleteSegment) els.deleteSegment.disabled = !hasEpisode || !editable;
+    if (els.undoEdit) els.undoEdit.disabled = !editable || !state.history.length;
+    if (els.redoEdit) els.redoEdit.disabled = !editable || !state.future.length;
+    if (els.showDeletedSegments) els.showDeletedSegments.disabled = !hasDataset || !editable;
+    if (els.exportPath) els.exportPath.disabled = !editable;
+    if (els.exportDataset) els.exportDataset.disabled = !hasDataset || !editable;
   }
 
   function setZoom(value) {

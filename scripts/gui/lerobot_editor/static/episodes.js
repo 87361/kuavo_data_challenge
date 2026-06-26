@@ -11,14 +11,15 @@ export function createEpisodeController(ctx) {
     for (const item of state.datasets) {
       const option = document.createElement("option");
       option.value = item.path;
-      const workspace = item.active_workspace_path || item.default_export_path || "";
+      const workspace = item.active_workspace_path || "";
       const suffix = workspace ? `  -> editing ${workspace}` : "";
-      option.textContent = `${item.version} ${item.editable ? "" : "(view only)"} ${item.path}${suffix}`;
-      option.disabled = !item.editable;
+      const mode = item.editable ? "" : (item.browseable ? "(view only)" : "(unsupported)");
+      option.textContent = `${item.version} ${mode} ${item.path}${suffix}`;
+      option.disabled = !item.browseable;
       els.datasetSelect.appendChild(option);
     }
-    const firstEditable = state.datasets.find((item) => item.editable);
-    if (firstEditable) els.datasetSelect.value = firstEditable.path;
+    const firstOpenable = state.datasets.find((item) => item.editable) || state.datasets.find((item) => item.browseable);
+    if (firstOpenable) els.datasetSelect.value = firstOpenable.path;
     setStatus(`${state.datasets.length} datasets`);
   }
 

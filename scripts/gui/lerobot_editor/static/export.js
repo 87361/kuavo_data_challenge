@@ -4,7 +4,7 @@ export function createExportController(ctx) {
   const { state, els, api, setStatus } = ctx;
 
   async function exportDataset() {
-    if (!state.dataset) return;
+    if (!state.dataset?.editable) return;
     const outputPath = els.exportPath.value.trim();
     if (!outputPath) return;
     const urdfPath = els.urdfPath.value.trim();

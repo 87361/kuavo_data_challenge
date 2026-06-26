@@ -173,6 +173,100 @@ def make_v21_dataset(root: Path, episode_count: int = 1, frames_per_episode: int
     return root
 
 
+def make_v30_dataset(root: Path, episode_count: int = 2, frames_per_episode: int = 4) -> Path:
+    import pyarrow as pa
+
+    total_frames = episode_count * frames_per_episode
+    video_key = "observation.images.head_cam_h"
+    info = {
+        "codebase_version": "v3.0",
+        "fps": 10,
+        "total_episodes": episode_count,
+        "total_frames": total_frames,
+        "total_videos": 1,
+        "chunks_size": 1000,
+        "total_chunks": 1,
+        "total_tasks": 1,
+        "splits": {"train": f"0:{episode_count}"},
+        "data_path": "data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet",
+        "video_path": "videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4",
+        "features": {
+            "observation.state": {
+                "dtype": "float32",
+                "shape": [16],
+                "names": {"state_names": [f"j{i}" for i in range(16)]},
+            },
+            "action": {
+                "dtype": "float32",
+                "shape": [16],
+                "names": {"action_names": [f"j{i}" for i in range(16)]},
+            },
+            video_key: {
+                "dtype": "video",
+                "shape": [3, 48, 64],
+                "names": ["channels", "height", "width"],
+            },
+            "timestamp": {"dtype": "float32", "shape": [1], "names": None},
+            "frame_index": {"dtype": "int64", "shape": [1], "names": None},
+            "episode_index": {"dtype": "int64", "shape": [1], "names": None},
+            "index": {"dtype": "int64", "shape": [1], "names": None},
+            "task_index": {"dtype": "int64", "shape": [1], "names": None},
+        },
+    }
+    write_json(root / "meta" / "info.json", info)
+
+    tasks_path = root / "meta" / "tasks.parquet"
+    tasks_path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(pa.Table.from_pydict({"task_index": [0], "task": ["test"]}), tasks_path)
+
+    episode_rows = []
+    for episode_index in range(episode_count):
+        start = episode_index * frames_per_episode
+        end = start + frames_per_episode
+        episode_rows.append(
+            {
+                "episode_index": episode_index,
+                "data/chunk_index": 0,
+                "data/file_index": 0,
+                "dataset_from_index": start,
+                "dataset_to_index": end,
+                f"videos/{video_key}/chunk_index": 0,
+                f"videos/{video_key}/file_index": 0,
+                f"videos/{video_key}/from_timestamp": start / 10,
+                f"videos/{video_key}/to_timestamp": end / 10,
+                "tasks": ["test"],
+                "length": frames_per_episode,
+            }
+        )
+    episodes_path = root / "meta" / "episodes" / "chunk-000" / "file-000.parquet"
+    episodes_path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(pa.Table.from_pylist(episode_rows), episodes_path)
+
+    data_rows = []
+    for index in range(total_frames):
+        episode_index = index // frames_per_episode
+        frame_index = index % frames_per_episode
+        vec = np.zeros(16, dtype=np.float32)
+        vec[0] = episode_index + frame_index * 0.1
+        vec[8] = episode_index + frame_index * 0.1
+        data_rows.append(
+            {
+                "observation.state": vec.tolist(),
+                "action": vec.tolist(),
+                "timestamp": frame_index / 10,
+                "frame_index": frame_index,
+                "episode_index": episode_index,
+                "index": index,
+                "task_index": 0,
+            }
+        )
+    data_path = root / "data" / "chunk-000" / "file-000.parquet"
+    data_path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(pa.Table.from_pylist(data_rows), data_path)
+    write_video(root / "videos" / video_key / "chunk-000" / "file-000.mp4", frames=total_frames)
+    return root
+
+
 def test_segments_and_ranges() -> None:
     segments = build_segments(10, [3, 7], [1])
     assert [(seg.start, seg.end, seg.deleted) for seg in segments] == [
@@ -225,6 +319,59 @@ def test_find_and_export_v21_dataset(tmp_path: Path) -> None:
     with av.open(str(output / "videos" / "chunk-000" / "observation.images.head_cam_h" / "episode_000000.mp4")) as container:
         assert sum(1 for _ in container.decode(container.streams.video[0])) == 5
     assert (output / "edit_manifest.json").exists()
+
+
+def test_open_v30_dataset_for_viewing(tmp_path: Path) -> None:
+    source = make_v30_dataset(tmp_path / "dataset" / "task" / "lerobot")
+    found = find_lerobot_datasets(tmp_path)
+    assert len(found) == 1
+    assert found[0].version == "v3.0"
+    assert found[0].browseable is True
+    assert found[0].editable is False
+
+    state.dataset = None
+    state.canonical_source_path = None
+    state.active_workspace_path = None
+    state.show_deleted_segments = False
+    state.edits = {}
+    state.episode_annotations = {}
+    state.note_labels = []
+    client = TestClient(app)
+
+    opened = client.post("/api/open", json={"path": str(source), "show_deleted_segments": True})
+    assert opened.status_code == 200
+    payload = opened.json()
+    assert payload["version"] == "v3.0"
+    assert payload["editable"] is False
+    assert payload["show_deleted_segments"] is False
+    assert payload["total_episodes"] == 2
+
+    episode = client.get("/api/episode/1").json()
+    assert episode["length"] == 4
+    assert episode["curves"]["observation.state"][0][0] == pytest.approx(1.0)
+    offsets = episode["video_offsets"]["observation.images.head_cam_h"]
+    assert offsets["time_offset"] == pytest.approx(0.4)
+    assert offsets["frame_offset"] == 4
+
+    frame = client.get(
+        "/api/frame",
+        params={"episode_index": 1, "frame_index": 0, "video_key": "observation.images.head_cam_h"},
+    )
+    assert frame.status_code == 200
+    assert frame.headers["content-type"] == "image/jpeg"
+
+    video = client.get(
+        "/api/video",
+        params={"episode_index": 1, "video_key": "observation.images.head_cam_h"},
+    )
+    assert video.status_code == 200
+    assert video.headers["content-type"].startswith("video/")
+
+    cut_response = client.post(
+        "/api/cuts",
+        json={"episode_index": 1, "cuts": [2], "deleted_segments": []},
+    )
+    assert cut_response.status_code == 403
 
 
 def test_export_without_urdf_uses_fixed_transition_frames(tmp_path: Path) -> None:

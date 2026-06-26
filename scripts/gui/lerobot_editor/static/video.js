@@ -21,6 +21,18 @@ export function createVideoController(ctx) {
     return `/api/frame?${params.toString()}`;
   }
 
+  function videoOffset(key) {
+    return Number(state.episode?.video_offsets?.[key]?.time_offset || 0);
+  }
+
+  function frameToVideoTime(key, frame) {
+    return videoOffset(key) + ctx.frames.frameToTime(frame);
+  }
+
+  function videoTimeToFrame(key, time) {
+    return ctx.frames.timeToFrame(Math.max(0, Number(time) - videoOffset(key)));
+  }
+
   function videoElements() {
     return Array.from(els.videoGrid.querySelectorAll("video"));
   }
@@ -54,9 +66,9 @@ export function createVideoController(ctx) {
   }
 
   function syncVideosToFrame(frame, force = false) {
-    const target = ctx.frames.frameToTime(frame);
     const tolerance = 0.5 / ctx.frames.fps();
     for (const video of playableVideoElements()) {
+      const target = frameToVideoTime(video.dataset.key, frame);
       if (video.readyState === 0) {
         video.dataset.pendingFrame = String(frame);
         continue;
@@ -231,10 +243,12 @@ export function createVideoController(ctx) {
     const now = performance.now();
     if (now - state.lastFollowerSync < 450) return;
     state.lastFollowerSync = now;
+    const localTime = Math.max(0, leader.currentTime - videoOffset(leader.dataset.key));
     for (const video of playableVideoElements()) {
       if (video === leader || video.readyState === 0) continue;
-      if (Math.abs(video.currentTime - leader.currentTime) > 0.08) {
-        video.currentTime = leader.currentTime;
+      const targetTime = videoOffset(video.dataset.key) + localTime;
+      if (Math.abs(video.currentTime - targetTime) > 0.08) {
+        video.currentTime = targetTime;
       }
     }
   }
@@ -244,7 +258,7 @@ export function createVideoController(ctx) {
     const leader = playableVideoElements()[0];
     if (!leader) return;
 
-    const nextFrame = ctx.frames.timeToFrame(leader.currentTime);
+    const nextFrame = videoTimeToFrame(leader.dataset.key, leader.currentTime);
     if (nextFrame !== state.currentFrame) {
       ctx.frames.setCurrentFrame(nextFrame, { seek: false });
     }

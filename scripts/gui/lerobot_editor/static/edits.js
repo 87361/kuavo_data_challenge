@@ -33,6 +33,7 @@ export function createEditController(ctx) {
   }
 
   async function syncCuts() {
+    if (!state.dataset?.editable) return;
     const payload = await api("/api/cuts", {
       method: "POST",
       body: JSON.stringify({
@@ -49,11 +50,12 @@ export function createEditController(ctx) {
     }
     state.selectedSegment = ctx.metrics.currentSegment()?.index ?? null;
     ctx.renderAll();
+    ctx.updateControlValues();
     ctx.progress.noteEdits(payload.all_edits);
   }
 
   async function cutAtFrame() {
-    if (!state.episode || state.currentFrame <= 0 || state.currentFrame >= state.episode.length) return;
+    if (!state.dataset?.editable || !state.episode || state.currentFrame <= 0 || state.currentFrame >= state.episode.length) return;
     if (state.playing) ctx.video.stopPlayback();
     pushHistory();
     const oldDeletedRanges = deletedRangesFromEpisode();
@@ -64,7 +66,7 @@ export function createEditController(ctx) {
   }
 
   async function toggleDeleteSegment() {
-    if (!state.episode) return;
+    if (!state.dataset?.editable || !state.episode) return;
     if (state.playing) ctx.video.stopPlayback();
     const seg = state.selectedSegment ?? ctx.metrics.currentSegment()?.index;
     if (seg === null || seg === undefined) return;
@@ -77,7 +79,7 @@ export function createEditController(ctx) {
   }
 
   async function applySnapshot(snap) {
-    if (!state.episode || !snap) return;
+    if (!state.dataset?.editable || !state.episode || !snap) return;
     if (state.playing) ctx.video.stopPlayback();
     state.episode.cuts = [...snap.cuts];
     state.episode.deleted_segments = [...snap.deleted_segments];

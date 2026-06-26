@@ -24,6 +24,7 @@ try:
         dataframe_to_curve_payload,
         decode_frame_jpeg,
         find_lerobot_datasets,
+        load_lerobot_dataset,
         load_v21_dataset,
     )
     from .edits import build_segments, normalize_episode_edit
@@ -35,6 +36,7 @@ except ImportError:  # pragma: no cover - direct script execution fallback
         dataframe_to_curve_payload,
         decode_frame_jpeg,
         find_lerobot_datasets,
+        load_lerobot_dataset,
         load_v21_dataset,
     )
     from edits import build_segments, normalize_episode_edit
@@ -213,7 +215,7 @@ class AppState:
 
 
 state = AppState()
-app = FastAPI(title="LeRobot v2.1 Editor")
+app = FastAPI(title="LeRobot Dataset Editor")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
@@ -659,6 +661,8 @@ def _progress_payload(dataset: LeRobotV21Dataset) -> dict[str, Any]:
 
 
 def _pending_export_episodes(dataset: LeRobotV21Dataset) -> list[int]:
+    if not dataset.editable:
+        return []
     export_path = state.active_workspace_path or (Path(state.last_export_path).expanduser().resolve() if state.last_export_path else None)
     if export_path is None:
         return sorted(int(key) for key in state.edits)
@@ -702,7 +706,7 @@ def _load_progress(dataset: LeRobotV21Dataset) -> None:
                 _apply_manifest_progress(
                     dataset,
                     _read_json_file(manifest_path),
-                    include_edits=state.show_deleted_segments,
+                    include_edits=dataset.editable and state.show_deleted_segments,
                 )
             except Exception:
                 pass
@@ -715,7 +719,7 @@ def _load_progress(dataset: LeRobotV21Dataset) -> None:
         _apply_progress_payload(
             dataset,
             source_payload,
-            include_edits=state.show_deleted_segments or state.active_workspace_path is None,
+            include_edits=dataset.editable and (state.show_deleted_segments or state.active_workspace_path is None),
         )
 
     if state.active_workspace_path is not None:
@@ -729,7 +733,7 @@ def _load_progress(dataset: LeRobotV21Dataset) -> None:
             _apply_progress_payload(
                 dataset,
                 workspace_payload,
-                include_edits=state.show_deleted_segments or workspace_active_path == active_dataset,
+                include_edits=dataset.editable and (state.show_deleted_segments or workspace_active_path == active_dataset),
             )
 
     _sync_completed_from_annotations()
@@ -879,6 +883,16 @@ def _episode_gripper_payload(dataset: LeRobotV21Dataset, df: Any) -> dict[str, A
     }
 
 
+def _episode_video_offsets(dataset: LeRobotV21Dataset, episode_index: int) -> dict[str, dict[str, Any]]:
+    return {
+        key: {
+            "time_offset": dataset.video_time_offset(episode_index, key),
+            "frame_offset": dataset.video_frame_offset(episode_index, key),
+        }
+        for key in dataset.video_keys
+    }
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
@@ -920,12 +934,12 @@ def api_open(req: OpenRequest) -> dict[str, Any]:
             active_dataset_path = _workspace_source_path(active_workspace, canonical)
         else:
             active_dataset_path = canonical
-        dataset = load_v21_dataset(active_dataset_path)
+        dataset = load_lerobot_dataset(active_dataset_path)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     state.canonical_source_path = canonical
-    state.active_workspace_path = active_workspace
-    state.show_deleted_segments = show_deleted
+    state.active_workspace_path = active_workspace if dataset.editable else None
+    state.show_deleted_segments = show_deleted and dataset.editable
     state.dataset = dataset
     _load_progress(dataset)
     state.analysis_job.reset()
@@ -936,8 +950,11 @@ def api_open(req: OpenRequest) -> dict[str, Any]:
     return {
         "path": str(canonical),
         "active_dataset": str(dataset.root),
-        "active_workspace_path": str(active_workspace) if active_workspace else None,
+        "active_workspace_path": str(state.active_workspace_path) if state.active_workspace_path else None,
         "show_deleted_segments": state.show_deleted_segments,
+        "version": dataset.codebase_version,
+        "editable": dataset.editable,
+        "browseable": True,
         "default_export_path": str(_default_workspace_path(canonical)),
         "fps": dataset.fps,
         "total_episodes": len(dataset.episodes),
@@ -971,6 +988,7 @@ def api_episode(episode_index: int) -> dict[str, Any]:
         "length": length,
         "fps": dataset.fps,
         "video_keys": dataset.video_keys,
+        "video_offsets": _episode_video_offsets(dataset, episode_index),
         "state_names": dataset.state_names,
         "action_names": dataset.action_names,
         "curves": {
@@ -998,7 +1016,11 @@ def api_frame(
     if frame_index >= dataset.episode_length(episode_index):
         raise HTTPException(status_code=404, detail="frame not found")
     try:
-        jpeg = decode_frame_jpeg(str(dataset.video_path(episode_index, video_key)), frame_index, max_width)
+        jpeg = decode_frame_jpeg(
+            str(dataset.video_path(episode_index, video_key)),
+            dataset.video_frame_index(episode_index, video_key, frame_index),
+            max_width,
+        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return Response(content=jpeg, media_type="image/jpeg")
@@ -1030,6 +1052,8 @@ def api_video(
 @app.post("/api/cuts")
 def api_cuts(req: CutsRequest) -> dict[str, Any]:
     dataset = state.require_dataset()
+    if not dataset.editable:
+        raise HTTPException(status_code=403, detail="This dataset is view-only; cuts are only supported for v2.1 datasets")
     if req.episode_index < 0 or req.episode_index >= len(dataset.episodes):
         raise HTTPException(status_code=404, detail="episode not found")
     try:
@@ -1120,6 +1144,8 @@ def api_episode_annotation(episode_index: int, req: EpisodeAnnotationRequest) ->
 def _run_export(req: ExportRequest) -> None:
     try:
         dataset = state.require_dataset()
+        if not dataset.editable:
+            raise ValueError("This dataset is view-only; export is only supported for v2.1 datasets")
         state.export_job.update(
             status="running",
             message="starting export",
@@ -1164,7 +1190,9 @@ def _run_export(req: ExportRequest) -> None:
 
 @app.post("/api/export")
 def api_export(req: ExportRequest) -> dict[str, Any]:
-    state.require_dataset()
+    dataset = state.require_dataset()
+    if not dataset.editable:
+        raise HTTPException(status_code=403, detail="This dataset is view-only; export is only supported for v2.1 datasets")
     if state.export_job.status == "running":
         raise HTTPException(status_code=409, detail="export already running")
     thread = threading.Thread(target=_run_export, args=(req,), daemon=True)

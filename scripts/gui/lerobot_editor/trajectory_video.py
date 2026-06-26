@@ -340,6 +340,7 @@ def render_video(
         dpi=max(72, int(args.dpi)),
         source_fps=base_fps,
     )
+    video_frame_offset = dataset.video_frame_offset(args.episode, args.video_key)
     decoder = iter_video_rgb(video_path)
     decoded_index = 0
     last_camera_frame: np.ndarray | None = None
@@ -349,7 +350,7 @@ def render_video(
         for out_idx, source_idx in enumerate(indices):
             camera_rgb, decoded_index, last_camera_frame = next_frame_for_index(
                 decoder,
-                source_idx,
+                video_frame_offset + source_idx,
                 decoded_index,
                 last_camera_frame,
             )
