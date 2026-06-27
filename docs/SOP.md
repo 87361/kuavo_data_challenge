@@ -33,6 +33,12 @@ ss -ltnp 'sport = :18080 or sport = :18081'
 ss -ltnp 'sport = :18080 or sport = :18081' | sed -n 's/.*pid=\([0-9]\+\).*/\1/p' | xargs -r kill
 python scripts/gui/lerobot_editor/server.py --host 127.0.0.1 --port 18080
 ```
+按照特定条件提取特定数据并转换为v3.0的脚本：
+scripts/data/export_scored_lerobot_v30.py
+默认用法：
+python scripts/data/export_scored_lerobot_v30.py \
+  --source-root /path/to/edited_v21/lerobot \
+  --output-root /path/to/output_v30/task/lerobot
 
 ## 真机赛 Task1 smoke 流程（50 条 real_suzhou_3.0，ACT，LeRobot v2.1/v3.0）
 

@@ -1,0 +1,28 @@
+defaults:
+  - diffusion_config
+  - _self_
+
+method: diffusion_right_arm_2cam
+
+feature_filter:
+  enabled: true
+  image_keys:
+    - observation.images.head_cam_h
+    - observation.images.wrist_cam_r
+  state_key: observation.state
+  action_key: action
+  state_indices: [8, 9, 10, 11, 12, 13, 14, 15]
+  action_indices: [8, 9, 10, 11, 12, 13, 14, 15]
+
+training:
+  max_epoch: 500
+  save_freq_epoch: 50
+  open_loop_eval_freq_epoch: 100
+  open_loop_eval_max_batches: null
+  batch_size: 160
+  num_workers: 8
+
+policy:
+  use_amp: true
+  custom:
+    use_depth: false

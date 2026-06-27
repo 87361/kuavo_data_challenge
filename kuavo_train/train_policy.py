@@ -3,9 +3,11 @@ from lerobot.configs.policies import PolicyFeature
 from typing import Any
 
 import hydra
+import json
 from omegaconf import DictConfig, OmegaConf, ListConfig
 from pathlib import Path
 from functools import partial
+from copy import deepcopy
 
 import torch
 from torch.utils.tensorboard import SummaryWriter
@@ -25,6 +27,11 @@ from kuavo_train.wrapper.policy.diffusion.DiffusionPolicyWrapper import CustomDi
 from kuavo_train.wrapper.policy.act.ACTPolicyWrapper import CustomACTPolicyWrapper
 from kuavo_train.wrapper.dataset.LeRobotDatasetWrapper import CustomLeRobotDataset
 from kuavo_train.utils.augmenter import crop_image, resize_image, DeterministicAugmenterColor
+from kuavo_train.utils.feature_filter import (
+    apply_feature_filter_to_metadata,
+    feature_filter_from_cfg,
+    make_feature_filter_step,
+)
 from kuavo_train.utils.utils import save_rng_state, load_rng_state
 from lerobot.policies.act.modeling_act import ACTPolicy
 from diffusers.optimization import get_scheduler
@@ -77,6 +84,17 @@ def build_delta_timestamps(dataset_metadata, policy_cfg):
             delta_timestamps[key] = [i / dataset_metadata.fps for i in act_indices]
 
     return delta_timestamps if delta_timestamps else None
+
+
+def filter_delta_timestamps(delta_timestamps, filter_spec):
+    if delta_timestamps is None or not filter_spec.get("enabled", False):
+        return delta_timestamps
+    allowed_keys = {
+        filter_spec["state_key"],
+        filter_spec["action_key"],
+        *filter_spec["image_keys"],
+    }
+    return {key: value for key, value in delta_timestamps.items() if key in allowed_keys}
 
 
 def build_optimizer_and_scheduler(policy, cfg, total_frames):
@@ -206,6 +224,70 @@ def remove_aug_step(pipeline, step_to_remove):
     else:
         print(f"Step {step_to_remove.__class__.__name__} not found in pipeline")
 
+
+def should_run_open_loop_eval(cfg, epoch):
+    freq = cfg.training.get("open_loop_eval_freq_epoch", None)
+    return freq is not None and freq > 0 and (epoch + 1) % freq == 0
+
+
+def _act_open_loop_metrics(policy, batch):
+    actions_hat = policy.predict_action_chunk(batch)
+    target = batch["action"]
+    diff = actions_hat - target
+    action_is_pad = batch.get("action_is_pad", None)
+    if action_is_pad is not None:
+        valid_mask = (~action_is_pad).unsqueeze(-1).expand_as(diff).to(diff.dtype)
+        denom = valid_mask.sum().clamp_min(1.0)
+        l1_loss = (diff.abs() * valid_mask).sum() / denom
+        mse_loss = (diff.pow(2) * valid_mask).sum() / denom
+    else:
+        l1_loss = diff.abs().mean()
+        mse_loss = diff.pow(2).mean()
+    return {"loss": l1_loss, "l1_loss": l1_loss, "mse_loss": mse_loss}
+
+
+def _open_loop_metrics(policy, batch, cfg):
+    if str(cfg.get("policy_name", "")) == "act":
+        return _act_open_loop_metrics(policy, batch)
+    loss, _ = policy.forward(batch)
+    return {"loss": loss}
+
+
+def run_open_loop_eval(policy, dataloader, preprocessor, cfg, make_autocast, amp_enabled, writer, output_directory, epoch, steps):
+    policy.eval()
+    metric_totals = {}
+    batch_count = 0
+    max_batches = cfg.training.get("open_loop_eval_max_batches", None)
+    eval_bar = tqdm(dataloader, desc=f"Open-loop eval epoch {epoch + 1}", leave=False)
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(eval_bar):
+            if max_batches is not None and batch_idx >= max_batches:
+                break
+            batch = preprocessor(batch)
+            with make_autocast(amp_enabled):
+                metrics = _open_loop_metrics(policy, batch, cfg)
+            for name, value in metrics.items():
+                metric_totals[name] = metric_totals.get(name, 0.0) + value.detach().item()
+            batch_count += 1
+            eval_bar.set_postfix(loss=f"{metrics['loss'].detach().item():.3f}")
+
+    mean_metrics = {
+        name: total / batch_count
+        for name, total in metric_totals.items()
+    } if batch_count > 0 else {"loss": float("nan")}
+    mean_loss = mean_metrics["loss"]
+    writer.add_scalar("open_loop/loss", mean_loss, steps)
+    for name, value in mean_metrics.items():
+        if name != "loss":
+            writer.add_scalar(f"open_loop/{name}", value, steps)
+    metrics_path = output_directory / "open_loop_eval_metrics.jsonl"
+    with metrics_path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps({"epoch": epoch + 1, "steps": steps, **mean_metrics}) + "\n")
+    metric_summary = ", ".join(f"{name}={value:.6f}" for name, value in mean_metrics.items())
+    print(f"Open-loop eval epoch {epoch + 1}: {metric_summary}")
+    policy.train()
+    return mean_loss
+
 @hydra.main(config_path="../configs/policy/", config_name="diffusion_config", version_base=None)
 def main(cfg: DictConfig):
     set_seed(cfg.training.seed)
@@ -225,9 +307,17 @@ def main(cfg: DictConfig):
     features = dataset_to_policy_features(dataset_metadata.features)
     input_features = {k: ft for k, ft in features.items() if ft.type is not FeatureType.ACTION}
     output_features = {k: ft for k, ft in features.items() if ft.type is FeatureType.ACTION}
+    filter_spec = feature_filter_from_cfg(cfg)
+    input_features, output_features, dataset_stats = apply_feature_filter_to_metadata(
+        input_features,
+        output_features,
+        dataset_metadata.stats,
+        filter_spec,
+    )
 
     print(f"Input features: {input_features}")
     print(f"Output features: {output_features}")
+    print(f"Feature filter: {filter_spec}")
 
     # instantiate the policy
     policy_cfg = build_policy_config(cfg, input_features, output_features)
@@ -235,9 +325,13 @@ def main(cfg: DictConfig):
 
     # Build policy
     policy = build_policy(cfg.policy_name, policy_cfg)
-    preprocessor, postprocessor = make_pre_post_processors(policy_cfg, dataset_stats=dataset_metadata.stats)
+    preprocessor, postprocessor = make_pre_post_processors(policy_cfg, dataset_stats=dataset_stats)
+    filter_step = make_feature_filter_step(filter_spec)
+    if filter_step is not None:
+        insert_before_normalizer(preprocessor, filter_step)
     preprocessor.save_pretrained(output_directory)
     postprocessor.save_pretrained(output_directory)
+    eval_preprocessor = deepcopy(preprocessor)
     optimizer, lr_scheduler = build_optimizer_and_scheduler(policy, cfg, dataset_metadata.info["total_frames"])
     
     # Initialize AMP GradScaler if use_amp is True
@@ -317,7 +411,7 @@ def main(cfg: DictConfig):
     print(f"Total parameters: {sum(p.numel() for p in policy.parameters()):,}")
     print(f"Using AMP: {amp_enabled}")
     # Build dataset and dataloader
-    delta_timestamps = build_delta_timestamps(dataset_metadata, policy_cfg)
+    delta_timestamps = filter_delta_timestamps(build_delta_timestamps(dataset_metadata, policy_cfg), filter_spec)
 
     image_transforms = build_augmenter(cfg.training.RGB_Augmenter)
     dataset = LeRobotDataset(
@@ -341,6 +435,8 @@ def main(cfg: DictConfig):
         shuffle = True
         sampler = None
     
+    stop_training = False
+    max_training_step = cfg.training.max_training_step
     for epoch in range(start_epoch, cfg.training.max_epoch):
         dataloader = DataLoader(
             dataset,
@@ -358,6 +454,9 @@ def main(cfg: DictConfig):
         
         total_loss = 0.0
         for batch in epoch_bar:
+            if max_training_step is not None and steps >= max_training_step:
+                stop_training = True
+                break
             batch = preprocessor(batch)  # will normalize and put batch to device
             with make_autocast(amp_enabled):
                 loss, _ = policy.forward(batch)
@@ -386,6 +485,9 @@ def main(cfg: DictConfig):
 
             steps += 1
             total_loss += scaled_loss.item()
+            if max_training_step is not None and steps >= max_training_step:
+                stop_training = True
+                break
         
         # Update best loss
         if total_loss < best_loss:
@@ -412,6 +514,24 @@ def main(cfg: DictConfig):
         }
         torch.save(checkpoint, output_directory / "learning_state.pth")
         save_rng_state(output_directory / "rng_state.pth")
+
+        if should_run_open_loop_eval(cfg, epoch):
+            run_open_loop_eval(
+                policy,
+                dataloader,
+                eval_preprocessor,
+                cfg,
+                make_autocast,
+                amp_enabled,
+                writer,
+                output_directory,
+                epoch,
+                steps,
+            )
+
+        if stop_training:
+            print(f"Reached training.max_training_step={max_training_step}; stopping.")
+            break
 
     writer.close()
 

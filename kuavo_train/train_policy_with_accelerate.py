@@ -3,9 +3,11 @@ from lerobot.configs.policies import PolicyFeature
 from typing import Any
 
 import hydra
+import json
 from omegaconf import DictConfig, OmegaConf, ListConfig
 from pathlib import Path
 from functools import partial
+from copy import deepcopy
 
 import torch
 from torch.utils.tensorboard import SummaryWriter
@@ -27,6 +29,11 @@ from kuavo_train.wrapper.policy.diffusion.DiffusionPolicyWrapper import CustomDi
 from kuavo_train.wrapper.policy.act.ACTPolicyWrapper import CustomACTPolicyWrapper
 from kuavo_train.wrapper.dataset.LeRobotDatasetWrapper import CustomLeRobotDataset
 from kuavo_train.utils.augmenter import crop_image, resize_image, DeterministicAugmenterColor
+from kuavo_train.utils.feature_filter import (
+    apply_feature_filter_to_metadata,
+    feature_filter_from_cfg,
+    make_feature_filter_step,
+)
 from kuavo_train.utils.utils import save_rng_state, load_rng_state
 from lerobot.policies.act.modeling_act import ACTPolicy
 from diffusers.optimization import get_scheduler
@@ -78,6 +85,17 @@ def build_delta_timestamps(dataset_metadata, policy_cfg):
             delta_timestamps[key] = [i / dataset_metadata.fps for i in act_indices]
 
     return delta_timestamps if delta_timestamps else None
+
+
+def filter_delta_timestamps(delta_timestamps, filter_spec):
+    if delta_timestamps is None or not filter_spec.get("enabled", False):
+        return delta_timestamps
+    allowed_keys = {
+        filter_spec["state_key"],
+        filter_spec["action_key"],
+        *filter_spec["image_keys"],
+    }
+    return {key: value for key, value in delta_timestamps.items() if key in allowed_keys}
 
 
 def build_optimizer_and_scheduler(policy, cfg, total_frames, accelerator):
@@ -209,6 +227,83 @@ def remove_aug_step(pipeline, step_to_remove):
     else:
         print(f"Step {step_to_remove.__class__.__name__} not found in pipeline")
 
+
+def should_run_open_loop_eval(cfg, epoch):
+    freq = cfg.training.get("open_loop_eval_freq_epoch", None)
+    return freq is not None and freq > 0 and (epoch + 1) % freq == 0
+
+
+def _act_open_loop_metrics(policy, batch):
+    actions_hat = policy.predict_action_chunk(batch)
+    target = batch["action"]
+    diff = actions_hat - target
+    action_is_pad = batch.get("action_is_pad", None)
+    if action_is_pad is not None:
+        valid_mask = (~action_is_pad).unsqueeze(-1).expand_as(diff).to(diff.dtype)
+        denom = valid_mask.sum().clamp_min(1.0)
+        l1_loss = (diff.abs() * valid_mask).sum() / denom
+        mse_loss = (diff.pow(2) * valid_mask).sum() / denom
+    else:
+        l1_loss = diff.abs().mean()
+        mse_loss = diff.pow(2).mean()
+    return {"loss": l1_loss, "l1_loss": l1_loss, "mse_loss": mse_loss}
+
+
+def _open_loop_metrics(policy, batch, cfg):
+    if str(cfg.get("policy_name", "")) == "act":
+        return _act_open_loop_metrics(policy, batch)
+    loss, _ = policy.forward(batch)
+    return {"loss": loss}
+
+
+def run_open_loop_eval(policy, dataloader, preprocessor, cfg, accelerator, writer, output_directory, epoch, steps):
+    accelerator.wait_for_everyone()
+    policy.eval()
+    eval_policy = accelerator.unwrap_model(policy) if str(cfg.get("policy_name", "")) == "act" else policy
+    metric_totals = {}
+    batch_count = 0
+    max_batches = cfg.training.get("open_loop_eval_max_batches", None)
+    if accelerator.is_main_process:
+        eval_bar = tqdm(dataloader, desc=f"Open-loop eval epoch {epoch + 1}", leave=False)
+    else:
+        eval_bar = dataloader
+
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(eval_bar):
+            if max_batches is not None and batch_idx >= max_batches:
+                break
+            batch = preprocessor(batch)
+            with accelerator.autocast():
+                metrics = _open_loop_metrics(eval_policy, batch, cfg)
+            gathered_metrics = {
+                name: accelerator.gather(value.detach()).mean().item()
+                for name, value in metrics.items()
+            }
+            for name, value in gathered_metrics.items():
+                metric_totals[name] = metric_totals.get(name, 0.0) + value
+            batch_count += 1
+            if accelerator.is_main_process:
+                eval_bar.set_postfix(loss=f"{gathered_metrics['loss']:.3f}")
+
+    mean_metrics = {
+        name: total / batch_count
+        for name, total in metric_totals.items()
+    } if batch_count > 0 else {"loss": float("nan")}
+    mean_loss = mean_metrics["loss"]
+    if accelerator.is_main_process:
+        writer.add_scalar("open_loop/loss", mean_loss, steps)
+        for name, value in mean_metrics.items():
+            if name != "loss":
+                writer.add_scalar(f"open_loop/{name}", value, steps)
+        metrics_path = output_directory / "open_loop_eval_metrics.jsonl"
+        with metrics_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"epoch": epoch + 1, "steps": steps, **mean_metrics}) + "\n")
+        metric_summary = ", ".join(f"{name}={value:.6f}" for name, value in mean_metrics.items())
+        accelerator.print(f"Open-loop eval epoch {epoch + 1}: {metric_summary}")
+    policy.train()
+    accelerator.wait_for_everyone()
+    return mean_loss
+
 @hydra.main(config_path="../configs/policy/", config_name="diffusion_config", version_base=None)
 def main(cfg: DictConfig):
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
@@ -241,16 +336,27 @@ def main(cfg: DictConfig):
     features = dataset_to_policy_features(dataset_metadata.features)
     input_features = {k: ft for k, ft in features.items() if ft.type is not FeatureType.ACTION}
     output_features = {k: ft for k, ft in features.items() if ft.type is FeatureType.ACTION}
+    filter_spec = feature_filter_from_cfg(cfg)
+    input_features, output_features, dataset_stats = apply_feature_filter_to_metadata(
+        input_features,
+        output_features,
+        dataset_metadata.stats,
+        filter_spec,
+    )
 
     # instantiate the policy
     policy_cfg = build_policy_config(cfg, input_features, output_features)
     # Build policy
     policy = build_policy(cfg.policy_name, policy_cfg)
     accelerator.wait_for_everyone()
-    preprocessor, postprocessor = make_pre_post_processors(policy_cfg, dataset_stats=dataset_metadata.stats)
+    preprocessor, postprocessor = make_pre_post_processors(policy_cfg, dataset_stats=dataset_stats)
+    filter_step = make_feature_filter_step(filter_spec)
+    if filter_step is not None:
+        insert_before_normalizer(preprocessor, filter_step)
     if accelerator.is_main_process:
         preprocessor.save_pretrained(output_directory)
         postprocessor.save_pretrained(output_directory)
+    eval_preprocessor = deepcopy(preprocessor)
     # Initialize optimizer and lr scheduler
     optimizer, lr_scheduler = build_optimizer_and_scheduler(policy, cfg, dataset_metadata.info["total_frames"], accelerator)
 
@@ -258,6 +364,7 @@ def main(cfg: DictConfig):
     accelerator.print("\n---policy_cfg", policy_cfg)
     accelerator.print(f"\n---Input features: {input_features}")
     accelerator.print(f"\n---Output features: {output_features}")
+    accelerator.print(f"\n---Feature filter: {filter_spec}")
     accelerator.print(f"\n---camera_keys:", dataset_metadata.camera_keys)
     accelerator.print(f"\n---Original dataset features:", dataset_metadata.features) 
 
@@ -267,7 +374,7 @@ def main(cfg: DictConfig):
 
 
     # Build dataset and dataloader
-    delta_timestamps = build_delta_timestamps(dataset_metadata, policy_cfg)
+    delta_timestamps = filter_delta_timestamps(build_delta_timestamps(dataset_metadata, policy_cfg), filter_spec)
 
     image_transforms = build_augmenter(cfg.training.RGB_Augmenter)
     dataset = LeRobotDataset(
@@ -335,6 +442,8 @@ def main(cfg: DictConfig):
 
     
     # Training loop
+    stop_training = False
+    max_training_step = cfg.training.max_training_step
     for epoch in range(start_epoch, cfg.training.max_epoch):
         policy.train()
 
@@ -347,6 +456,9 @@ def main(cfg: DictConfig):
         total_loss = 0.0
         batch_count = 0
         for batch in epoch_bar:
+            if max_training_step is not None and steps >= max_training_step:
+                stop_training = True
+                break
             batch = preprocessor(batch)
             with accelerator.accumulate(policy):
                 # batch = {k: (v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v) for k, v in batch.items()}
@@ -367,6 +479,9 @@ def main(cfg: DictConfig):
                     steps += 1
                     batch_count += 1
                     total_loss += accelerator.gather(loss).mean().item()
+                    if max_training_step is not None and steps >= max_training_step:
+                        stop_training = True
+                        break
 
         total_loss = total_loss / batch_count if batch_count > 0 else total_loss
         
@@ -395,6 +510,21 @@ def main(cfg: DictConfig):
             torch.save(training_state, output_directory / "training_latest_state.pth")
             accelerator.print(f"Epoch {epoch+1} completed. Avg Loss: {total_loss:.4f}. Best Loss: {best_loss:.4f}")
         accelerator.wait_for_everyone()
+        if should_run_open_loop_eval(cfg, epoch):
+            run_open_loop_eval(
+                policy,
+                dataloader,
+                eval_preprocessor,
+                cfg,
+                accelerator,
+                writer if accelerator.is_main_process else None,
+                output_directory,
+                epoch,
+                steps,
+            )
+        if stop_training:
+            accelerator.print(f"Reached training.max_training_step={max_training_step}; stopping.")
+            break
 
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
